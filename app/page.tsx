@@ -39,6 +39,11 @@ type Author = {
   sendError?: string;
   bookLoading?: boolean;
   bookMessage?: string;
+  sendTo?: string;
+  contactLoading?: boolean;
+  contactMessage?: string;
+  contactEmails?: { email: string; source: string }[];
+  manualEmail?: string;
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
@@ -164,6 +169,8 @@ export default function Home() {
                     : "idle"
                   : a.status,
               writing: false,
+              contactLoading: false,
+              bookLoading: false,
               editing: false,
               sendStatus: a.sendStatus === "sending" ? undefined : a.sendStatus,
             }),
@@ -360,7 +367,85 @@ export default function Home() {
       bookTitle: c.bookTitle,
       bookWhy: c.bookWhy,
     });
+    updateAuthor(email, {
+      sendTo: undefined,
+      manualEmail: undefined,
+      contactEmails: undefined,
+      contactMessage: "",
+    });
     if (!c.bookWhy) findBookDetails(email, c.authorName, c.bookTitle);
+  }
+
+  // Checks that an email address looks real
+  function validEmail(s: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+  }
+
+  // Where the email will be sent
+  function recipientOf(a: Author) {
+    return (a.sendTo ?? a.email).trim();
+  }
+
+  // Sending is allowed when the address is valid, and the match is exact
+  // or you chose the address yourself
+  function canSend(a: Author) {
+    if (!validEmail(recipientOf(a))) return false;
+    return a.result?.matchType === "exact" || a.sendTo !== undefined;
+  }
+  // Looks for the author's own public email
+  async function findContactEmail(author: Author) {
+    if (!author.result?.authorName) return;
+    updateAuthor(author.email, {
+      contactLoading: true,
+      contactMessage: "",
+      contactEmails: undefined,
+    });
+
+    try {
+      const res = await fetch("/api/find-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authorName: author.result.authorName,
+          bookTitle: author.result.bookTitle,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        updateAuthor(author.email, {
+          contactLoading: false,
+          contactMessage: data.error || "Could not search for the email.",
+        });
+        return;
+      }
+
+      const list: { email: string; source: string }[] = data.emails || [];
+      if (list.length === 0) {
+        updateAuthor(author.email, {
+          contactLoading: false,
+          contactMessage: `Email not found for ${author.result.authorName}. Please research it manually.`,
+        });
+        return;
+      }
+
+      const same = list.find(
+        (c) => c.email.toLowerCase() === author.email.toLowerCase(),
+      );
+      updateAuthor(author.email, {
+        contactLoading: false,
+        contactEmails: list,
+        contactMessage: same
+          ? "✅ The uploaded email was found on this author's own pages, so it really belongs to them."
+          : "Open each source page to check it before you choose.",
+        ...(same ? { sendTo: author.email } : {}),
+      });
+    } catch {
+      updateAuthor(author.email, {
+        contactLoading: false,
+        contactMessage: "Could not reach the server.",
+      });
+    }
   }
 
   // Asks our research route about one author
@@ -588,12 +673,19 @@ export default function Home() {
 
   // The "Send to author" button
   async function sendOneClick(author: Author) {
+    if (!canSend(author)) {
+      setError(
+        "Choose where to send first: find this author's own email, or click 'Keep uploaded email'.",
+      );
+      return;
+    }
+    const to = recipientOf(author);
     if (
-      wasSent(author.email) &&
+      wasSent(to) &&
       !confirm("You already emailed this address before. Send again?")
     )
       return;
-    if (!confirm(`Send this email to ${author.email}?`)) return;
+    if (!confirm(`Send this email to ${to}?`)) return;
     await sendOne(author);
   }
 
@@ -603,13 +695,10 @@ export default function Home() {
       (a) =>
         a.approval === "approved" &&
         a.draft &&
+        canSend(a) &&
         a.sendStatus !== "sent" &&
-        !wasSent(a.email),
+        !wasSent(recipientOf(a)),
     );
-    if (todo.length === 0) {
-      setProgress("Nothing to send.");
-      return;
-    }
 
     const batch = todo.slice(0, MAX_PER_RUN);
     if (
@@ -796,6 +885,7 @@ export default function Home() {
                   (a) =>
                     a.approval === "approved" &&
                     a.draft &&
+                    canSend(a) &&
                     a.sendStatus !== "sent",
                 ).length
               }{" "}
@@ -958,6 +1048,110 @@ export default function Home() {
                             </ul>
                           </div>
                         )}
+                        {a.result.matchType !== "exact" &&
+                          a.result.authorName && (
+                            <div className="mt-3 rounded border border-yellow-300 bg-yellow-50 p-3 text-sm">
+                              <p>
+                                The email you uploaded (<b>{a.email}</b>) was
+                                not confirmed as belonging to{" "}
+                                <b>{a.result.authorName}</b>. A message sent
+                                there may reach someone else.
+                              </p>
+
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={() => findContactEmail(a)}
+                                  disabled={a.contactLoading}
+                                  className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
+                                >
+                                  {a.contactLoading
+                                    ? "Searching..."
+                                    : `Find ${a.result.authorName}'s own email`}
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    updateAuthor(a.email, { sendTo: a.email })
+                                  }
+                                  className="rounded border px-3 py-1"
+                                >
+                                  Keep uploaded email
+                                </button>
+                              </div>
+
+                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <input
+                                  value={a.manualEmail ?? ""}
+                                  onChange={(e) =>
+                                    updateAuthor(a.email, {
+                                      manualEmail: e.target.value,
+                                    })
+                                  }
+                                  placeholder="Found the right email yourself? Type it here"
+                                  className="min-w-[16rem] flex-1 rounded border bg-white p-2 text-gray-900"
+                                />
+                                <button
+                                  onClick={() => {
+                                    const v = (a.manualEmail ?? "").trim();
+                                    if (!validEmail(v)) {
+                                      updateAuthor(a.email, {
+                                        contactMessage:
+                                          "That email does not look right. Please check it and try again.",
+                                      });
+                                      return;
+                                    }
+                                    updateAuthor(a.email, {
+                                      sendTo: v,
+                                      contactMessage: `✅ Using ${v}, the email you added yourself.`,
+                                    });
+                                  }}
+                                  className="rounded border px-3 py-1"
+                                >
+                                  Use this email
+                                </button>
+                              </div>
+
+                              {a.contactMessage && (
+                                <p className="mt-2 text-blue-700">
+                                  {a.contactMessage}
+                                </p>
+                              )}
+
+                              {a.contactEmails &&
+                                a.contactEmails.length > 0 && (
+                                  <ul className="mt-2 list-disc pl-5">
+                                    {a.contactEmails.map((c, n) => (
+                                      <li key={n} className="mb-1">
+                                        <b>{c.email}</b>{" "}
+                                        <a
+                                          href={c.source}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="text-blue-600 underline"
+                                        >
+                                          (where it was found)
+                                        </a>{" "}
+                                        <button
+                                          onClick={() =>
+                                            updateAuthor(a.email, {
+                                              sendTo: c.email,
+                                            })
+                                          }
+                                          className="ml-1 rounded border px-2 py-0.5 text-xs"
+                                        >
+                                          Send to this email
+                                        </button>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+
+                              <p className="mt-2 font-semibold">
+                                {a.sendTo !== undefined
+                                  ? `✉️ Will send to: ${a.sendTo || "(empty)"}`
+                                  : "⛔ No send address chosen yet."}
+                              </p>
+                            </div>
+                          )}
 
                         {a.result.sources.length > 0 && (
                           <div className="mt-3 text-sm">
@@ -1082,9 +1276,31 @@ export default function Home() {
 
                             {a.draft && (
                               <div className="mt-3 rounded border bg-white p-3">
-                                <p className="mb-1 text-sm text-gray-500">
-                                  To: {a.email}
-                                </p>
+                                <label className="block text-sm font-semibold">
+                                  To
+                                </label>
+                                <input
+                                  value={a.sendTo ?? a.email}
+                                  onChange={(e) =>
+                                    updateAuthor(a.email, {
+                                      sendTo: e.target.value,
+                                    })
+                                  }
+                                  className="mb-1 w-full rounded border p-2 text-gray-900"
+                                />
+                                {!validEmail(recipientOf(a)) && (
+                                  <p className="mb-2 text-sm text-red-600">
+                                    This email address does not look valid.
+                                  </p>
+                                )}
+                                {a.sendTo !== undefined &&
+                                  a.sendTo.trim().toLowerCase() !==
+                                    a.email.toLowerCase() && (
+                                    <p className="mb-2 text-xs text-gray-500">
+                                      Changed from the uploaded email ({a.email}
+                                      ).
+                                    </p>
+                                  )}
 
                                 {/\[[^\]]+\]/.test(
                                   a.draft.subject + a.draft.body,
@@ -1138,7 +1354,8 @@ export default function Home() {
                                     onClick={() => sendOneClick(a)}
                                     disabled={
                                       a.sendStatus === "sending" ||
-                                      a.sendStatus === "sent"
+                                      a.sendStatus === "sent" ||
+                                      !canSend(a)
                                     }
                                     className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
                                   >
