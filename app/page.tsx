@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Papa from "papaparse";
 
 type Source = { title: string; url: string };
@@ -66,6 +66,37 @@ Best regards,
 Augustine Emmanuel
 Literary Publicist | The Author Global Press`;
 
+// ---------- Look and feel (purple and white) ----------
+const CARD = "rounded-2xl border border-violet-100 bg-white p-6 shadow-sm";
+const BTN =
+  "inline-flex min-h-[44px] items-center justify-center rounded-lg bg-violet-700 px-4 text-sm font-semibold text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50";
+const BTN_OUT =
+  "inline-flex min-h-[44px] items-center justify-center rounded-lg border border-violet-300 bg-white px-4 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50";
+const BTN_STOP =
+  "inline-flex min-h-[44px] items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700";
+const BTN_SM =
+  "rounded-md border border-violet-300 bg-white px-2.5 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50";
+const INPUT =
+  "w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm text-violet-950 placeholder:text-gray-400 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-200";
+const LABEL = "mb-1 block text-sm font-semibold";
+const BADGE = "rounded-full px-3 py-1 text-xs font-semibold";
+
+// The colored label that shows the state of one author
+function statusBadge(a: Author): { text: string; cls: string } {
+  if (a.status === "loading")
+    return { text: "Researching…", cls: "bg-violet-100 text-violet-900" };
+  if (a.status === "error")
+    return { text: "Research failed", cls: "bg-red-100 text-red-800" };
+  if (a.status === "idle")
+    return { text: "Not researched", cls: "bg-violet-100 text-violet-900" };
+  const m = a.result?.matchType;
+  if (m === "exact")
+    return { text: "Exact match", cls: "bg-green-100 text-green-800" };
+  if (m === "possible")
+    return { text: "Possible match", cls: "bg-amber-100 text-amber-900" };
+  return { text: "No author found", cls: "bg-red-100 text-red-800" };
+}
+
 // Replaces the placeholders in a text
 function fillText(
   text: string,
@@ -82,6 +113,7 @@ function fillText(
     out = out.replace(/\[\s*insert[^\]]*\]/gi, () => vals.detail);
   return out;
 }
+
 // A small log in your browser of who you already emailed
 const SENT_KEY = "sentEmails";
 
@@ -125,6 +157,7 @@ export default function Home() {
   const [researchingAll, setResearchingAll] = useState(false);
   const [researchProgress, setResearchProgress] = useState("");
   const stopResearchRef = useRef(false);
+  const [authorsLoaded, setAuthorsLoaded] = useState(false);
 
   // Load the saved template when the page opens
   useEffect(() => {
@@ -149,9 +182,8 @@ export default function Home() {
       );
     } catch {}
   }, [subjectTemplate, bodyTemplate, templateLoaded]);
-  // Load the saved author list when the page opens
-  const [authorsLoaded, setAuthorsLoaded] = useState(false);
 
+  // Load the saved author list when the page opens
   useEffect(() => {
     try {
       const saved = localStorage.getItem("authorsList");
@@ -225,9 +257,8 @@ export default function Home() {
     });
   }
 
-  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Reads a CSV file (from the file box or from drag and drop)
+  function parseCsv(file: File) {
     setError("");
 
     Papa.parse<Record<string, string>>(file, {
@@ -252,7 +283,12 @@ export default function Home() {
       },
       error: () => setError("Could not read this file."),
     });
+  }
 
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    parseCsv(file);
     e.target.value = "";
   }
 
@@ -392,6 +428,7 @@ export default function Home() {
     if (!validEmail(recipientOf(a))) return false;
     return a.result?.matchType === "exact" || a.sendTo !== undefined;
   }
+
   // Looks for the author's own public email
   async function findContactEmail(author: Author) {
     if (!author.result?.authorName) return;
@@ -546,6 +583,7 @@ export default function Home() {
         : `Finished. ${ok} researched, ${failed} failed.`,
     );
   }
+
   // Changes the email draft of one author (used when you edit it)
   function updateDraft(email: string, changes: Partial<Draft>) {
     setAuthors((current) =>
@@ -608,6 +646,7 @@ export default function Home() {
       }
     }
   }
+
   const MAX_PER_RUN = 30;
 
   function hasPlaceholder(d: Draft) {
@@ -635,7 +674,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to: author.email,
+          to: recipientOf(author),
           subject: author.draft.subject,
           body: author.draft.body,
           test,
@@ -657,7 +696,7 @@ export default function Home() {
         setProgress("✅ Test email sent to your own inbox. Go and check it.");
         return true;
       }
-      addSent(author.email);
+      addSent(recipientOf(author));
       updateAuthor(author.email, { sendStatus: "sent" });
       return true;
     } catch {
@@ -699,6 +738,10 @@ export default function Home() {
         a.sendStatus !== "sent" &&
         !wasSent(recipientOf(a)),
     );
+    if (todo.length === 0) {
+      setProgress("Nothing to send.");
+      return;
+    }
 
     const batch = todo.slice(0, MAX_PER_RUN);
     if (
@@ -716,7 +759,7 @@ export default function Home() {
     for (let i = 0; i < batch.length; i++) {
       if (stopRef.current) break;
       setProgress(
-        `Sending ${i + 1} of ${batch.length} to ${batch[i].email}...`,
+        `Sending ${i + 1} of ${batch.length} to ${recipientOf(batch[i])}...`,
       );
       const ok = await sendOne(batch[i]);
       if (ok) done++;
@@ -741,654 +784,745 @@ export default function Home() {
     );
   }
 
+  // Numbers for the top of the page
+  const approvedCount = authors.filter((a) => a.approval === "approved").length;
+  const sentCount = authors.filter((a) => a.sendStatus === "sent").length;
+  const researchedCount = authors.filter((a) => a.status === "done").length;
+  const todoResearch = authors.filter(
+    (a) => a.status === "idle" || a.status === "error",
+  ).length;
+  const needFill = authors.filter(
+    (a) => a.approval === "approved" && !a.draft,
+  ).length;
+  const readyToSend = authors.filter(
+    (a) =>
+      a.approval === "approved" &&
+      a.draft &&
+      canSend(a) &&
+      a.sendStatus !== "sent",
+  ).length;
+
+  const steps = [
+    { n: 1, label: "Add authors", on: true },
+    { n: 2, label: "Research", on: authors.length > 0 },
+    { n: 3, label: "Approve", on: researchedCount > 0 },
+    { n: 4, label: "Send", on: approvedCount > 0 },
+  ];
+
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <h1 className="text-3xl font-bold">Author Outreach</h1>
-      <p className="mt-2 text-gray-600">
-        Add authors by uploading a CSV file or by pasting emails below.
-      </p>
+    <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+      {/* Header */}
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-700 font-extrabold text-white">
+            AO
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold">Author Outreach</h1>
+            <p className="text-sm text-gray-600">
+              Research authors. Send personal emails.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className={`${BADGE} bg-violet-100 text-violet-900`}>
+            {authors.length} authors
+          </span>
+          <span className={`${BADGE} bg-violet-100 text-violet-900`}>
+            {approvedCount} approved
+          </span>
+          <span className={`${BADGE} bg-violet-100 text-violet-900`}>
+            {sentCount} sent
+          </span>
+        </div>
+      </header>
 
-      <h2 className="mt-6 font-semibold">Option 1: Upload a CSV</h2>
-      <p className="text-sm text-gray-500">
-        Needs an <b>email</b> column. A <b>name</b> column is optional.
-      </p>
-      <input
-        type="file"
-        accept=".csv"
-        onChange={handleFile}
-        className="mt-2 block w-full rounded border p-3"
-      />
-
-      <h2 className="mt-6 font-semibold">Option 2: Paste emails</h2>
-      <p className="text-sm text-gray-500">
-        One per line. You can add a name after the email, like:{" "}
-        <i>jane@example.com Jane Doe</i>
-      </p>
-      <textarea
-        value={pasted}
-        onChange={(e) => setPasted(e.target.value)}
-        rows={6}
-        placeholder={"jane@example.com Jane Doe\njohn@example.com"}
-        className="mt-2 w-full rounded border p-3"
-      />
-      <button
-        onClick={handlePaste}
-        className="mt-2 rounded bg-black px-4 py-2 text-white"
-      >
-        Add emails
-      </button>
-
-      <h2 className="mt-8 font-semibold">Your email template</h2>
-      <p className="text-sm text-gray-500">
-        Paste your own email here, or upload a .txt file. Use these
-        placeholders: <b>[Author Name]</b>, <b>[First Name]</b>,{" "}
-        <b>[Book Title]</b>, and <b>[Insert 1 specific detail: ...]</b> (the AI
-        fills this one). If you paste a full email that starts with
-        &quot;Subject:&quot;, the subject line is split off for you.
-      </p>
-      <input
-        value={subjectTemplate}
-        onChange={(e) => setSubjectTemplate(e.target.value)}
-        placeholder="Subject line"
-        className="mt-2 w-full rounded border p-3"
-      />
-      <textarea
-        value={bodyTemplate}
-        onChange={(e) => handleBodyChange(e.target.value)}
-        rows={16}
-        className="mt-2 w-full rounded border p-3"
-      />
-      <div className="mt-2 flex flex-wrap items-center gap-3">
-        <label className="cursor-pointer rounded border px-3 py-2 text-sm">
-          Upload .txt template
-          <input
-            type="file"
-            accept=".txt"
-            onChange={handleTemplateFile}
-            className="hidden"
-          />
-        </label>
-        <button
-          onClick={() => {
-            setSubjectTemplate(DEFAULT_SUBJECT);
-            setBodyTemplate(DEFAULT_BODY);
-          }}
-          className="text-sm text-gray-500 underline"
-        >
-          Reset to the example
-        </button>
-        <button
-          onClick={fillAllApproved}
-          className="rounded bg-purple-600 px-4 py-2 text-white"
-        >
-          Fill template for all approved (
-          {authors.filter((a) => a.approval === "approved" && !a.draft).length})
-        </button>
+      {/* Steps */}
+      <div className={`${CARD} flex flex-wrap gap-x-8 gap-y-3 py-4`}>
+        {steps.map((s) => (
+          <div
+            key={s.n}
+            className="flex items-center gap-2 text-sm font-semibold"
+          >
+            <span
+              className={`flex h-7 w-7 items-center justify-center rounded-full text-xs ${
+                s.on
+                  ? "bg-violet-700 text-white"
+                  : "bg-violet-100 text-violet-900"
+              }`}
+            >
+              {s.n}
+            </span>
+            {s.label}
+          </div>
+        ))}
       </div>
 
-      {error && <p className="mt-4 text-red-600">{error}</p>}
+      {/* Add authors + template */}
+      <div className="grid gap-6 md:grid-cols-2">
+        <section className={`${CARD} space-y-4`}>
+          <div>
+            <h2 className="text-lg font-bold">Add authors</h2>
+            <p className="text-sm text-gray-600">
+              Upload a CSV or paste emails.
+            </p>
+          </div>
 
-      {authors.length > 0 && (
-        <div className="mt-8">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-xl font-semibold">
-              {authors.length} authors loaded (
-              {authors.filter((a) => a.approval === "approved").length}{" "}
-              approved)
-            </h2>
+          <label
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const f = e.dataTransfer.files?.[0];
+              if (f) parseCsv(f);
+            }}
+            className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-violet-300 bg-violet-50/60 p-6 text-center"
+          >
+            <span className="font-semibold">Drop a CSV file here</span>
+            <span className="text-sm text-gray-600">
+              Needs an <b>email</b> column. A <b>name</b> column is optional.
+            </span>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFile}
+              className="sr-only"
+            />
+            <span className="rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-semibold text-violet-700">
+              Choose file
+            </span>
+          </label>
+
+          <div>
+            <label htmlFor="paste" className={LABEL}>
+              Or paste emails (one per line, name after the email is optional)
+            </label>
+            <textarea
+              id="paste"
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              rows={4}
+              placeholder={"jane@example.com Jane Doe\njohn@example.com"}
+              className={INPUT}
+            />
+          </div>
+          <button onClick={handlePaste} className={BTN}>
+            Add emails
+          </button>
+        </section>
+
+        <section className={`${CARD} space-y-3`}>
+          <div>
+            <h2 className="text-lg font-bold">Your email template</h2>
+            <p className="text-sm text-gray-600">
+              Saved in your browser. Edit it anytime.
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="subject" className={LABEL}>
+              Subject
+            </label>
+            <input
+              id="subject"
+              value={subjectTemplate}
+              onChange={(e) => setSubjectTemplate(e.target.value)}
+              placeholder="Subject line"
+              className={INPUT}
+            />
+          </div>
+          <div>
+            <label htmlFor="message" className={LABEL}>
+              Message
+            </label>
+            <textarea
+              id="message"
+              value={bodyTemplate}
+              onChange={(e) => handleBodyChange(e.target.value)}
+              rows={10}
+              className={INPUT}
+            />
+          </div>
+
+          <p className="text-xs text-gray-600">
+            Placeholders: [Author Name], [First Name], [Book Title], and [Insert
+            1 specific detail: ...] (the AI fills this one). Paste a full email
+            that starts with &quot;Subject:&quot; and the subject splits off for
+            you.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <label className={`${BTN_OUT} cursor-pointer`}>
+              Upload .txt
+              <input
+                type="file"
+                accept=".txt"
+                onChange={handleTemplateFile}
+                className="sr-only"
+              />
+            </label>
+            <button
+              onClick={() => {
+                setSubjectTemplate(DEFAULT_SUBJECT);
+                setBodyTemplate(DEFAULT_BODY);
+              }}
+              className="text-sm font-semibold text-gray-600 underline"
+            >
+              Reset to the example
+            </button>
+          </div>
+          <button onClick={fillAllApproved} className={BTN}>
+            Fill template for all approved ({needFill})
+          </button>
+        </section>
+      </div>
+
+      {error && (
+        <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </p>
+      )}
+
+      {/* Authors */}
+      <section className={`${CARD} space-y-4`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-bold">Authors</h2>
+          {authors.length > 0 && (
             <button
               onClick={() => {
                 if (confirm("Remove all authors, research and drafts?"))
                   setAuthors([]);
               }}
-              className="text-sm text-red-600 underline"
+              className="text-sm font-semibold text-red-700 underline"
             >
               Clear all
             </button>
-          </div>
-          <div className="mb-3 flex flex-wrap items-center gap-3 rounded border bg-gray-50 p-3 text-gray-900">
-            <button
-              onClick={researchAll}
-              disabled={researchingAll}
-              className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
-            >
-              Research all (
-              {
-                authors.filter(
-                  (a) => a.status === "idle" || a.status === "error",
-                ).length
-              }{" "}
-              to do)
-            </button>
-            {researchingAll && (
+          )}
+        </div>
+
+        {authors.length === 0 && (
+          <p className="rounded-xl bg-violet-50 p-6 text-center text-sm text-gray-600">
+            No authors yet. Upload a CSV or paste some emails above.
+          </p>
+        )}
+
+        {authors.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
-                onClick={() => (stopResearchRef.current = true)}
-                className="rounded bg-red-600 px-4 py-2 text-white"
+                onClick={researchAll}
+                disabled={researchingAll}
+                className={BTN}
               >
-                Stop
+                Research all ({todoResearch} to do)
               </button>
-            )}
-            {researchProgress && (
-              <span className="text-sm">{researchProgress}</span>
-            )}
-          </div>
+              {researchingAll && (
+                <button
+                  onClick={() => {
+                    stopResearchRef.current = true;
+                  }}
+                  className={BTN_STOP}
+                >
+                  Stop
+                </button>
+              )}
+              {researchProgress && (
+                <span className="text-sm text-gray-600">
+                  {researchProgress}
+                </span>
+              )}
+            </div>
 
-          <div className="mb-3 flex flex-wrap items-center gap-3 rounded border bg-gray-50 p-3 text-gray-900">
-            <button
-              onClick={sendAllApproved}
-              disabled={sendingAll}
-              className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
-            >
-              Send all approved (
-              {
-                authors.filter(
-                  (a) =>
-                    a.approval === "approved" &&
-                    a.draft &&
-                    canSend(a) &&
-                    a.sendStatus !== "sent",
-                ).length
-              }{" "}
-              ready)
-            </button>
-            {sendingAll && (
+            <div className="flex flex-wrap items-center gap-3">
               <button
-                onClick={() => (stopRef.current = true)}
-                className="rounded bg-red-600 px-4 py-2 text-white"
+                onClick={sendAllApproved}
+                disabled={sendingAll}
+                className={BTN_OUT}
               >
-                Stop
+                Send all approved ({readyToSend} ready)
               </button>
-            )}
-            {progress && <span className="text-sm">{progress}</span>}
+              {sendingAll && (
+                <button
+                  onClick={() => {
+                    stopRef.current = true;
+                  }}
+                  className={BTN_STOP}
+                >
+                  Stop
+                </button>
+              )}
+              {progress && (
+                <span className="text-sm text-gray-600">{progress}</span>
+              )}
+            </div>
           </div>
+        )}
 
-          <table className="w-full border text-left">
-            <thead className="bg-gray-100 text-gray-900">
-              <tr>
-                <th className="border p-2">#</th>
-                <th className="border p-2">Email</th>
-                <th className="border p-2">Name</th>
-                <th className="border p-2">Research</th>
-              </tr>
-            </thead>
-            <tbody>
-              {authors.map((a, i) => (
-                <Fragment key={a.email}>
-                  <tr>
-                    <td className="border p-2">{i + 1}</td>
-                    <td className="border p-2">{a.email}</td>
-                    <td className="border p-2">{a.name || "-"}</td>
-                    <td className="border p-2">
-                      <button
-                        onClick={() => researchAuthor(a)}
-                        disabled={a.status === "loading"}
-                        className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
-                      >
-                        {a.status === "loading"
-                          ? "Researching..."
-                          : a.status === "done"
-                            ? "Redo"
-                            : "Research"}
-                      </button>
-                    </td>
-                  </tr>
+        {authors.map((a, i) => {
+          const r = a.result;
+          const badge = statusBadge(a);
 
-                  {a.status === "error" && (
-                    <tr key={a.email + "-error"}>
-                      <td colSpan={4} className="border p-3 text-red-600">
-                        {a.message}
-                      </td>
-                    </tr>
+          return (
+            <article
+              key={a.email}
+              className="rounded-2xl border border-violet-100 bg-white p-5"
+            >
+              {/* Top row */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="break-all font-semibold">{a.email}</p>
+                  <p className="text-sm text-gray-600">
+                    #{i + 1}
+                    {a.name ? ` · ${a.name}` : ""}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`${BADGE} ${badge.cls}`}>{badge.text}</span>
+                  {a.approval === "approved" && (
+                    <span className={`${BADGE} bg-green-100 text-green-800`}>
+                      Approved
+                    </span>
+                  )}
+                  {a.approval === "rejected" && (
+                    <span className={`${BADGE} bg-red-100 text-red-800`}>
+                      Rejected
+                    </span>
+                  )}
+                  {a.sendStatus === "sent" && (
+                    <span className={`${BADGE} bg-green-100 text-green-800`}>
+                      Sent
+                    </span>
+                  )}
+                  <button
+                    onClick={() => researchAuthor(a)}
+                    disabled={a.status === "loading"}
+                    className={BTN_OUT}
+                  >
+                    {a.status === "loading"
+                      ? "Researching…"
+                      : a.status === "done"
+                        ? "Redo"
+                        : "Research"}
+                  </button>
+                </div>
+              </div>
+
+              {a.status === "error" && (
+                <p className="mt-3 text-sm text-red-700">{a.message}</p>
+              )}
+
+              {/* Result */}
+              {a.status === "done" && r && (
+                <div className="mt-4 space-y-3 rounded-xl bg-violet-50 p-4 text-sm">
+                  {r.matchType === "exact" && (
+                    <p className="font-semibold text-green-800">
+                      This email was found in the search results.
+                    </p>
+                  )}
+                  {r.matchType === "possible" && (
+                    <p className="font-semibold text-amber-900">
+                      The exact email was not found. These are possible authors
+                      with a similar name. Please check the sources before you
+                      trust this.
+                    </p>
+                  )}
+                  {r.matchType === "none" && (
+                    <p className="font-semibold text-red-800">
+                      No author found for this email.
+                    </p>
                   )}
 
-                  {a.status === "done" && a.result && (
-                    <tr key={a.email + "-result"}>
-                      <td
-                        colSpan={4}
-                        className="border bg-gray-50 p-4 text-gray-900"
-                      >
-                        {a.result.matchType === "exact" && (
-                          <p className="mb-3 rounded bg-green-100 p-2 text-sm text-green-900">
-                            ✅ Exact match: this email was found in the search
-                            results.
-                          </p>
-                        )}
-                        {a.result.matchType === "possible" && (
-                          <p className="mb-3 rounded bg-yellow-100 p-2 text-sm text-yellow-900">
-                            ⚠️ The exact email was not found. These are possible
-                            authors with a similar name. Please check the
-                            sources before you trust this.
-                          </p>
-                        )}
-                        {a.result.matchType === "none" && (
-                          <p className="mb-3 rounded bg-red-100 p-2 text-sm text-red-900">
-                            ❌ No author found for this email.
-                          </p>
-                        )}
+                  {r.authorName && (
+                    <div className="space-y-1">
+                      <p className="text-base">
+                        <b>
+                          {r.matchType === "possible"
+                            ? "Best guess:"
+                            : "Author:"}
+                        </b>{" "}
+                        {r.authorName}{" "}
+                        <span className="text-xs text-gray-600">
+                          (confidence: {r.confidence})
+                        </span>
+                      </p>
+                      {r.bookTitle && (
+                        <p>
+                          <b>Book:</b> {r.bookTitle}
+                        </p>
+                      )}
+                      {r.bookWhy && (
+                        <p>
+                          <b>Why it stands out:</b> {r.bookWhy}
+                        </p>
+                      )}
+                      {a.bookMessage && (
+                        <p className="text-violet-800">{a.bookMessage}</p>
+                      )}
+                      {r.bookTitle && !r.bookWhy && (
+                        <p className="text-gray-600">
+                          No details about this book yet.
+                          <button
+                            onClick={() =>
+                              findBookDetails(
+                                a.email,
+                                r.authorName,
+                                r.bookTitle,
+                              )
+                            }
+                            disabled={a.bookLoading}
+                            className={`${BTN_SM} ml-2`}
+                          >
+                            {a.bookLoading ? "Searching…" : "Find book details"}
+                          </button>
+                        </p>
+                      )}
+                    </div>
+                  )}
 
-                        {a.result.authorName && (
-                          <>
-                            <p>
-                              <b>
-                                {a.result.matchType === "possible"
-                                  ? "Best guess:"
-                                  : "Author:"}
-                              </b>{" "}
-                              {a.result.authorName}{" "}
-                              <span className="text-sm text-gray-500">
-                                (confidence: {a.result.confidence})
+                  {r.notes && <p className="text-gray-600">{r.notes}</p>}
+
+                  {r.candidates.length > 0 && (
+                    <div>
+                      <b>Other authors with a similar name:</b>
+                      <ul className="mt-1 list-disc space-y-1 pl-5">
+                        {r.candidates.map((c, n) => (
+                          <li key={n}>
+                            <b>{c.authorName}</b>
+                            {c.bookTitle && <> – {c.bookTitle}</>}
+                            {c.reason && (
+                              <span className="text-gray-600">
+                                {" "}
+                                ({c.reason})
                               </span>
-                            </p>
-                            {a.result.bookTitle && (
-                              <p className="mt-1">
-                                <b>Book:</b> {a.result.bookTitle}
+                            )}{" "}
+                            <button
+                              onClick={() => pickCandidate(a.email, c)}
+                              className={BTN_SM}
+                            >
+                              Use this one
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Where to send, when the match is not exact */}
+                  {r.matchType !== "exact" && r.authorName && (
+                    <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+                      <p>
+                        The email you uploaded (<b>{a.email}</b>) was not
+                        confirmed as belonging to <b>{r.authorName}</b>. A
+                        message sent there may reach someone else.
+                      </p>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => findContactEmail(a)}
+                          disabled={a.contactLoading}
+                          className={BTN}
+                        >
+                          {a.contactLoading
+                            ? "Searching…"
+                            : `Find ${r.authorName}'s own email`}
+                        </button>
+                        <button
+                          onClick={() =>
+                            updateAuthor(a.email, { sendTo: a.email })
+                          }
+                          className={BTN_OUT}
+                        >
+                          Keep uploaded email
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          value={a.manualEmail ?? ""}
+                          onChange={(e) =>
+                            updateAuthor(a.email, {
+                              manualEmail: e.target.value,
+                            })
+                          }
+                          placeholder="Found the right email yourself? Type it here"
+                          className={`${INPUT} min-w-[16rem] flex-1`}
+                        />
+                        <button
+                          onClick={() => {
+                            const v = (a.manualEmail ?? "").trim();
+                            if (!validEmail(v)) {
+                              updateAuthor(a.email, {
+                                contactMessage:
+                                  "That email does not look right. Please check it and try again.",
+                              });
+                              return;
+                            }
+                            updateAuthor(a.email, {
+                              sendTo: v,
+                              contactMessage: `✅ Using ${v}, the email you added yourself.`,
+                            });
+                          }}
+                          className={BTN_OUT}
+                        >
+                          Use this email
+                        </button>
+                      </div>
+
+                      {a.contactMessage && (
+                        <p className="font-semibold text-violet-900">
+                          {a.contactMessage}
+                        </p>
+                      )}
+
+                      {a.contactEmails && a.contactEmails.length > 0 && (
+                        <ul className="list-disc space-y-1 pl-5">
+                          {a.contactEmails.map((c, n) => (
+                            <li key={n}>
+                              <b>{c.email}</b>{" "}
+                              <a
+                                href={c.source}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-violet-700 underline"
+                              >
+                                (where it was found)
+                              </a>{" "}
+                              <button
+                                onClick={() =>
+                                  updateAuthor(a.email, { sendTo: c.email })
+                                }
+                                className={BTN_SM}
+                              >
+                                Send to this email
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      <p className="font-semibold">
+                        {a.sendTo !== undefined
+                          ? `Will send to: ${a.sendTo || "(empty)"}`
+                          : "No send address chosen yet."}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Sources */}
+                  {r.sources.length > 0 && (
+                    <details>
+                      <summary className="cursor-pointer font-semibold">
+                        Sources ({r.sources.length})
+                      </summary>
+                      <ul className="mt-2 list-disc space-y-1 pl-5">
+                        {r.sources.map((s, n) => (
+                          <li key={n}>
+                            <a
+                              href={s.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-violet-700 underline"
+                            >
+                              {s.title}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
+                  {/* Edit form */}
+                  {a.editing && (
+                    <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-4">
+                      <div>
+                        <label className={LABEL}>Author name</label>
+                        <input
+                          value={r.authorName}
+                          onChange={(e) =>
+                            updateResult(a.email, {
+                              authorName: e.target.value,
+                            })
+                          }
+                          className={INPUT}
+                        />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Book title</label>
+                        <input
+                          value={r.bookTitle}
+                          onChange={(e) =>
+                            updateResult(a.email, {
+                              bookTitle: e.target.value,
+                            })
+                          }
+                          className={INPUT}
+                        />
+                      </div>
+                      <div>
+                        <label className={LABEL}>Why it stands out</label>
+                        <textarea
+                          value={r.bookWhy}
+                          onChange={(e) =>
+                            updateResult(a.email, { bookWhy: e.target.value })
+                          }
+                          rows={3}
+                          className={INPUT}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Yes / No / Edit */}
+                  <div className="flex flex-wrap items-center gap-2 border-t border-violet-100 pt-3">
+                    <button
+                      onClick={() =>
+                        updateAuthor(a.email, {
+                          approval: "approved",
+                          editing: false,
+                        })
+                      }
+                      className={BTN}
+                    >
+                      Yes, correct
+                    </button>
+                    <button
+                      onClick={() =>
+                        updateAuthor(a.email, {
+                          approval: "rejected",
+                          editing: false,
+                        })
+                      }
+                      className={BTN_OUT}
+                    >
+                      No
+                    </button>
+                    <button
+                      onClick={() =>
+                        updateAuthor(a.email, { editing: !a.editing })
+                      }
+                      className={BTN_OUT}
+                    >
+                      {a.editing ? "Close edit" : "Edit"}
+                    </button>
+                  </div>
+
+                  {/* Email draft */}
+                  {a.approval === "approved" && (
+                    <div className="space-y-3 border-t border-violet-100 pt-3">
+                      <button
+                        onClick={() => fillTemplate(a)}
+                        disabled={a.writing}
+                        className={BTN}
+                      >
+                        {a.writing
+                          ? "Filling…"
+                          : a.draft
+                            ? "Fill again (resets edits)"
+                            : "Fill template"}
+                      </button>
+
+                      {a.draft && (
+                        <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-4">
+                          <div>
+                            <label className={LABEL}>To</label>
+                            <input
+                              value={a.sendTo ?? a.email}
+                              onChange={(e) =>
+                                updateAuthor(a.email, {
+                                  sendTo: e.target.value,
+                                })
+                              }
+                              className={INPUT}
+                            />
+                            {!validEmail(recipientOf(a)) && (
+                              <p className="mt-1 text-sm text-red-700">
+                                This email address does not look valid.
                               </p>
                             )}
-                            {a.result.bookWhy && (
-                              <p className="mt-1">
-                                <b>Why it stands out:</b> {a.result.bookWhy}
-                              </p>
-                            )}
-                            {a.bookMessage && (
-                              <p className="mt-1 text-sm text-blue-700">
-                                {a.bookMessage}
-                              </p>
-                            )}
-                            {a.result.bookTitle && !a.result.bookWhy && (
-                              <p className="mt-1 text-sm text-gray-600">
-                                No details about this book yet.
-                                <button
-                                  onClick={() =>
-                                    findBookDetails(
-                                      a.email,
-                                      a.result!.authorName,
-                                      a.result!.bookTitle,
-                                    )
-                                  }
-                                  disabled={a.bookLoading}
-                                  className="ml-2 rounded border px-2 py-0.5 text-xs disabled:opacity-50"
-                                >
-                                  {a.bookLoading
-                                    ? "Searching..."
-                                    : "Find book details"}
-                                </button>
-                              </p>
-                            )}
-                          </>
-                        )}
-
-                        {a.result.notes && (
-                          <p className="mt-2 text-sm text-gray-600">
-                            {a.result.notes}
-                          </p>
-                        )}
-
-                        {a.result.candidates.length > 0 && (
-                          <div className="mt-3 text-sm">
-                            <b>Other authors with a similar name:</b>
-                            <ul className="mt-1 list-disc pl-5">
-                              {a.result.candidates.map((c, n) => (
-                                <li key={n} className="mb-1">
-                                  <b>{c.authorName}</b>
-                                  {c.bookTitle && <> – {c.bookTitle}</>}
-                                  {c.reason && (
-                                    <span className="text-gray-600">
-                                      {" "}
-                                      ({c.reason})
-                                    </span>
-                                  )}{" "}
-                                  <button
-                                    onClick={() => pickCandidate(a.email, c)}
-                                    className="ml-1 rounded border px-2 py-0.5 text-xs"
-                                  >
-                                    Use this one
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {a.result.matchType !== "exact" &&
-                          a.result.authorName && (
-                            <div className="mt-3 rounded border border-yellow-300 bg-yellow-50 p-3 text-sm">
-                              <p>
-                                The email you uploaded (<b>{a.email}</b>) was
-                                not confirmed as belonging to{" "}
-                                <b>{a.result.authorName}</b>. A message sent
-                                there may reach someone else.
-                              </p>
-
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <button
-                                  onClick={() => findContactEmail(a)}
-                                  disabled={a.contactLoading}
-                                  className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
-                                >
-                                  {a.contactLoading
-                                    ? "Searching..."
-                                    : `Find ${a.result.authorName}'s own email`}
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    updateAuthor(a.email, { sendTo: a.email })
-                                  }
-                                  className="rounded border px-3 py-1"
-                                >
-                                  Keep uploaded email
-                                </button>
-                              </div>
-
-                              <div className="mt-3 flex flex-wrap items-center gap-2">
-                                <input
-                                  value={a.manualEmail ?? ""}
-                                  onChange={(e) =>
-                                    updateAuthor(a.email, {
-                                      manualEmail: e.target.value,
-                                    })
-                                  }
-                                  placeholder="Found the right email yourself? Type it here"
-                                  className="min-w-[16rem] flex-1 rounded border bg-white p-2 text-gray-900"
-                                />
-                                <button
-                                  onClick={() => {
-                                    const v = (a.manualEmail ?? "").trim();
-                                    if (!validEmail(v)) {
-                                      updateAuthor(a.email, {
-                                        contactMessage:
-                                          "That email does not look right. Please check it and try again.",
-                                      });
-                                      return;
-                                    }
-                                    updateAuthor(a.email, {
-                                      sendTo: v,
-                                      contactMessage: `✅ Using ${v}, the email you added yourself.`,
-                                    });
-                                  }}
-                                  className="rounded border px-3 py-1"
-                                >
-                                  Use this email
-                                </button>
-                              </div>
-
-                              {a.contactMessage && (
-                                <p className="mt-2 text-blue-700">
-                                  {a.contactMessage}
+                            {a.sendTo !== undefined &&
+                              a.sendTo.trim().toLowerCase() !==
+                                a.email.toLowerCase() && (
+                                <p className="mt-1 text-xs text-gray-600">
+                                  Changed from the uploaded email ({a.email}).
                                 </p>
                               )}
+                          </div>
 
-                              {a.contactEmails &&
-                                a.contactEmails.length > 0 && (
-                                  <ul className="mt-2 list-disc pl-5">
-                                    {a.contactEmails.map((c, n) => (
-                                      <li key={n} className="mb-1">
-                                        <b>{c.email}</b>{" "}
-                                        <a
-                                          href={c.source}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="text-blue-600 underline"
-                                        >
-                                          (where it was found)
-                                        </a>{" "}
-                                        <button
-                                          onClick={() =>
-                                            updateAuthor(a.email, {
-                                              sendTo: c.email,
-                                            })
-                                          }
-                                          className="ml-1 rounded border px-2 py-0.5 text-xs"
-                                        >
-                                          Send to this email
-                                        </button>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-
-                              <p className="mt-2 font-semibold">
-                                {a.sendTo !== undefined
-                                  ? `✉️ Will send to: ${a.sendTo || "(empty)"}`
-                                  : "⛔ No send address chosen yet."}
-                              </p>
-                            </div>
+                          {/\[[^\]]+\]/.test(
+                            a.draft.subject + a.draft.body,
+                          ) && (
+                            <p className="rounded-lg bg-amber-100 p-2 text-amber-900">
+                              Some placeholders are still not filled (like{" "}
+                              {
+                                (a.draft.subject + a.draft.body).match(
+                                  /\[[^\]]+\]/,
+                                )?.[0]
+                              }
+                              ). Please fix them by hand below before sending.
+                            </p>
                           )}
 
-                        {a.result.sources.length > 0 && (
-                          <div className="mt-3 text-sm">
-                            <b>Sources:</b>
-                            <ul className="list-disc pl-5">
-                              {a.result.sources.map((s, n) => (
-                                <li key={n}>
-                                  <a
-                                    href={s.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-blue-600 underline"
-                                  >
-                                    {s.title}
-                                  </a>
-                                </li>
-                              ))}
-                            </ul>
+                          <div>
+                            <label className={LABEL}>Subject</label>
+                            <input
+                              value={a.draft.subject}
+                              onChange={(e) =>
+                                updateDraft(a.email, {
+                                  subject: e.target.value,
+                                })
+                              }
+                              className={INPUT}
+                            />
                           </div>
-                        )}
-
-                        {/* Edit form */}
-                        {a.editing && (
-                          <div className="mt-4 rounded border bg-white p-3">
-                            <label className="block text-sm font-semibold">
-                              Author name
-                            </label>
-                            <input
-                              value={a.result.authorName}
-                              onChange={(e) =>
-                                updateResult(a.email, {
-                                  authorName: e.target.value,
-                                })
-                              }
-                              className="mb-2 w-full rounded border p-2 text-gray-900"
-                            />
-                            <label className="block text-sm font-semibold">
-                              Book title
-                            </label>
-                            <input
-                              value={a.result.bookTitle}
-                              onChange={(e) =>
-                                updateResult(a.email, {
-                                  bookTitle: e.target.value,
-                                })
-                              }
-                              className="mb-2 w-full rounded border p-2 text-gray-900"
-                            />
-                            <label className="block text-sm font-semibold">
-                              Why it stands out
-                            </label>
+                          <div>
+                            <label className={LABEL}>Email</label>
                             <textarea
-                              value={a.result.bookWhy}
+                              value={a.draft.body}
                               onChange={(e) =>
-                                updateResult(a.email, {
-                                  bookWhy: e.target.value,
-                                })
+                                updateDraft(a.email, { body: e.target.value })
                               }
-                              rows={3}
-                              className="w-full rounded border p-2 text-gray-900"
+                              rows={14}
+                              className={INPUT}
                             />
                           </div>
-                        )}
 
-                        {/* Yes / No / Edit buttons */}
-                        <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3">
-                          <button
-                            onClick={() =>
-                              updateAuthor(a.email, {
-                                approval: "approved",
-                                editing: false,
-                              })
-                            }
-                            className="rounded bg-green-600 px-3 py-1 text-white"
-                          >
-                            Yes, correct
-                          </button>
-                          <button
-                            onClick={() =>
-                              updateAuthor(a.email, {
-                                approval: "rejected",
-                                editing: false,
-                              })
-                            }
-                            className="rounded bg-red-600 px-3 py-1 text-white"
-                          >
-                            No
-                          </button>
-                          <button
-                            onClick={() =>
-                              updateAuthor(a.email, { editing: !a.editing })
-                            }
-                            className="rounded border px-3 py-1"
-                          >
-                            {a.editing ? "Close edit" : "Edit"}
-                          </button>
-
-                          {a.approval === "approved" && (
-                            <span className="font-semibold text-green-700">
-                              ✅ Approved
-                            </span>
-                          )}
-                          {a.approval === "rejected" && (
-                            <span className="font-semibold text-red-700">
-                              ❌ Rejected
-                            </span>
-                          )}
-                        </div>
-                        {a.approval === "approved" && (
-                          <div className="mt-4 border-t pt-3">
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
-                              onClick={() => fillTemplate(a)}
-                              disabled={a.writing}
-                              className="rounded bg-purple-600 px-3 py-1 text-white disabled:opacity-50"
+                              onClick={() => sendOne(a, true)}
+                              className={BTN_OUT}
                             >
-                              {a.writing
-                                ? "Filling..."
-                                : a.draft
-                                  ? "Fill again (resets edits)"
-                                  : "Fill template"}
+                              Send test to me
                             </button>
-
-                            {a.draft && (
-                              <div className="mt-3 rounded border bg-white p-3">
-                                <label className="block text-sm font-semibold">
-                                  To
-                                </label>
-                                <input
-                                  value={a.sendTo ?? a.email}
-                                  onChange={(e) =>
-                                    updateAuthor(a.email, {
-                                      sendTo: e.target.value,
-                                    })
-                                  }
-                                  className="mb-1 w-full rounded border p-2 text-gray-900"
-                                />
-                                {!validEmail(recipientOf(a)) && (
-                                  <p className="mb-2 text-sm text-red-600">
-                                    This email address does not look valid.
-                                  </p>
-                                )}
-                                {a.sendTo !== undefined &&
-                                  a.sendTo.trim().toLowerCase() !==
-                                    a.email.toLowerCase() && (
-                                    <p className="mb-2 text-xs text-gray-500">
-                                      Changed from the uploaded email ({a.email}
-                                      ).
-                                    </p>
-                                  )}
-
-                                {/\[[^\]]+\]/.test(
-                                  a.draft.subject + a.draft.body,
-                                ) && (
-                                  <p className="mb-2 rounded bg-yellow-100 p-2 text-sm text-yellow-900">
-                                    ⚠️ Some placeholders are still not filled
-                                    (like{" "}
-                                    {
-                                      (a.draft.subject + a.draft.body).match(
-                                        /\[[^\]]+\]/,
-                                      )?.[0]
-                                    }
-                                    ). Please fix them by hand below before
-                                    sending.
-                                  </p>
-                                )}
-
-                                <label className="block text-sm font-semibold">
-                                  Subject
-                                </label>
-                                <input
-                                  value={a.draft.subject}
-                                  onChange={(e) =>
-                                    updateDraft(a.email, {
-                                      subject: e.target.value,
-                                    })
-                                  }
-                                  className="mb-2 w-full rounded border p-2 text-gray-900"
-                                />
-                                <label className="block text-sm font-semibold">
-                                  Email
-                                </label>
-                                <textarea
-                                  value={a.draft.body}
-                                  onChange={(e) =>
-                                    updateDraft(a.email, {
-                                      body: e.target.value,
-                                    })
-                                  }
-                                  rows={14}
-                                  className="w-full rounded border p-2 text-gray-900"
-                                />
-                                <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  <button
-                                    onClick={() => sendOne(a, true)}
-                                    className="rounded border px-3 py-1 text-sm"
-                                  >
-                                    Send test to me
-                                  </button>
-                                  <button
-                                    onClick={() => sendOneClick(a)}
-                                    disabled={
-                                      a.sendStatus === "sending" ||
-                                      a.sendStatus === "sent" ||
-                                      !canSend(a)
-                                    }
-                                    className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
-                                  >
-                                    {a.sendStatus === "sending"
-                                      ? "Sending..."
-                                      : a.sendStatus === "sent"
-                                        ? "Sent"
-                                        : "Send to author"}
-                                  </button>
-                                  {a.sendStatus === "sent" && (
-                                    <span className="font-semibold text-green-700">
-                                      ✅ Sent
-                                    </span>
-                                  )}
-                                  {a.sendStatus === "failed" && (
-                                    <span className="text-red-600">
-                                      ❌ {a.sendError}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
+                            <button
+                              onClick={() => sendOneClick(a)}
+                              disabled={
+                                a.sendStatus === "sending" ||
+                                a.sendStatus === "sent" ||
+                                !canSend(a)
+                              }
+                              className={BTN}
+                            >
+                              {a.sendStatus === "sending"
+                                ? "Sending…"
+                                : a.sendStatus === "sent"
+                                  ? "Sent"
+                                  : "Send to author"}
+                            </button>
+                            {a.sendStatus === "failed" && (
+                              <span className="text-red-700">
+                                {a.sendError}
+                              </span>
                             )}
                           </div>
-                        )}
-                      </td>
-                    </tr>
+                        </div>
+                      )}
+                    </div>
                   )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </section>
     </main>
   );
 }
