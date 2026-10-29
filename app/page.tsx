@@ -49,24 +49,35 @@ type Author = {
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
-const DEFAULT_SUBJECT = "Feature draft for [Book Title]";
+const DEFAULT_SUBJECT = "National media feature spotlight for [Book Title]";
 
-const DEFAULT_BODY = `Hi [Author Name],
+const DEFAULT_BODY = `Hello [Author Name],
 
-I recently came across [Book Title] and was really impressed by [Insert 1 specific detail: e.g., your message on resilience / your unique approach to personal growth].
+I recently came across your book, *[Book Title]*, and what caught my attention was its focus on [briefly mention the book’s main theme, message, or subject].
 
-Our team at The Author Global Press runs a dedicated Author Spotlight Series where we feature independent authors and help connect their stories with active readers online.
+The way your book explores [mention a specific topic, character, life lesson, or interesting idea from the book] gives readers something meaningful to connect with. I can imagine the time, creativity, and dedication that went into bringing this story to life.
 
-Instead of asking you to take my word for it, our editorial team would love to write a custom, complimentary feature draft for [Book Title] so you can see exact coverage before making any decisions.
+I'm reaching out from The Author Global Press to introduce our Author Spotlight Feature, which focuses on highlighting authors, their writing journeys, and the inspiration and message behind their books.
 
-If you'd be open to reviewing a $0 preview draft for your book, simply reply "YES" to this email and I'll send it over for you to check out.
+Through a personalized editorial feature, we aim to help more readers discover your work and learn the story behind it.
 
-Either way, congratulations on publishing [Book Title], it's a fantastic piece of work!
+Your feature can help you:
 
-Best regards,
+- Introduce *[Book Title]* to new readers.
+- Share the inspiration and message behind your book.
+- Highlight your journey and experience as an author.
+- Strengthen your online author presence.
+- Give interested readers a direct way to discover your book.
 
-Augustine Emmanuel
-Literary Publicist | The Author Global Press`;
+You can review a complimentary draft before deciding whether to proceed. There is no drafting fee and no obligation to move forward.
+
+Would you be interested in seeing a personalized feature draft for *[Book Title]*?
+
+Simply reply **YES**, and I'll be happy to discuss the next step.
+
+Best regards,  
+  
+The Author Global Press`;
 
 // ---------- Look and feel (purple and white) ----------
 const CARD = "rounded-2xl border border-violet-100 bg-white p-6 shadow-sm";
