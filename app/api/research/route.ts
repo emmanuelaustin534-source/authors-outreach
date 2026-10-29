@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
-import { researchBook } from "../../../lib/book";
+
 export const maxDuration = 60;
 
 type TavilyResult = { title: string; url: string; content: string };
@@ -136,22 +136,10 @@ Reply with a JSON object like this:
 
     const sources = results.map((r) => ({ title: r.title, url: r.url }));
 
-    // Research the book itself (a second search)
-    let bookSources: { title: string; url: string }[] = [];
-    if (data.authorName && data.bookTitle && !data.bookWhy) {
-      try {
-        const info = await researchBook(data.authorName, data.bookTitle);
-        data.bookWhy = info.bookWhy;
-        bookSources = info.sources;
-      } catch (e) {
-        console.error("Book research failed:", e);
-      }
-    }
-
     return NextResponse.json({
       ...data,
       candidates: data.candidates ?? [],
-      sources: [...sources, ...bookSources],
+      sources,
     });
   } catch (err) {
     console.error(err);

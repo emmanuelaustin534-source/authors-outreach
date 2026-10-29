@@ -1385,12 +1385,14 @@ export default function Home() {
                       Yes, correct
                     </button>
                     <button
-                      onClick={() =>
+                      onClick={() => {
                         updateAuthor(a.email, {
-                          approval: "rejected",
+                          approval: "approved",
                           editing: false,
-                        })
-                      }
+                        });
+                        if (r.bookTitle && !r.bookWhy && !a.bookLoading)
+                          findBookDetails(a.email, r.authorName, r.bookTitle);
+                      }}
                       className={BTN_OUT}
                     >
                       No
