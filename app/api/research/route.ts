@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
 import { researchBook } from "../../../lib/book";
+export const maxDuration = 60;
 
 type TavilyResult = { title: string; url: string; content: string };
 

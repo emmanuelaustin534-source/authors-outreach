@@ -115,9 +115,10 @@ Write what makes this book interesting or unique, in one or two sentences.
 
 Rules:
 - Use ONLY facts found in the pages above. Do not guess.
-- Prefer the book's own description (the blurb written by the author or publisher).
-- Write about the story, theme, setting or approach of the book. Do NOT write about prices, sales, ranks or the number of reviews.
-- If the pages do not describe the book itself, return an empty string.
+- If a page has the book's description (the blurb), use it.
+- If there is no description, you may use what the pages clearly say about the story, theme or setting (for example from the author's bio or reader reviews).
+- Do NOT write about prices, sales, ranks or the number of reviews.
+- Only return an empty string if the pages say nothing about the book's story or theme.
 
 Reply with a JSON object: { "bookWhy": "the sentences, or empty string" }`;
 
@@ -128,6 +129,9 @@ Reply with a JSON object: { "bookWhy": "the sentences, or empty string" }`;
   });
 
   const text = response.text ?? "";
+  console.log("Text sent to Gemini:", searchText.length, "chars");
+  console.log("Gemini book reply:", text);
+
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1) return empty;

@@ -38,6 +38,7 @@ type Author = {
   sendStatus?: "sending" | "sent" | "failed";
   sendError?: string;
   bookLoading?: boolean;
+  bookMessage?: string;
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
@@ -305,7 +306,7 @@ export default function Home() {
       return;
     }
     setError("");
-    updateAuthor(email, { bookLoading: true });
+    updateAuthor(email, { bookLoading: true, bookMessage: "" });
 
     try {
       const res = await fetch("/api/research-book", {
@@ -316,8 +317,10 @@ export default function Home() {
       const data = await res.json();
 
       if (!res.ok) {
-        updateAuthor(email, { bookLoading: false });
-        setError(data.error || "Could not research the book.");
+        updateAuthor(email, {
+          bookLoading: false,
+          bookMessage: data.error || "Could not research the book.",
+        });
         return;
       }
 
@@ -331,6 +334,9 @@ export default function Home() {
           return {
             ...a,
             bookLoading: false,
+            bookMessage: data.bookWhy
+              ? "Book details found. Click Fill again on the email below to put them in."
+              : "No details about this book were found on the pages. Use Edit to type your own detail.",
             result: {
               ...a.result,
               bookWhy: data.bookWhy || "",
@@ -339,15 +345,11 @@ export default function Home() {
           };
         }),
       );
-
-      if (!data.bookWhy) {
-        setError(
-          "No details about this book were found. You can type them yourself with Edit.",
-        );
-      }
     } catch {
-      updateAuthor(email, { bookLoading: false });
-      setError("Could not reach the server.");
+      updateAuthor(email, {
+        bookLoading: false,
+        bookMessage: "Could not reach the server.",
+      });
     }
   }
 
@@ -895,6 +897,11 @@ export default function Home() {
                             {a.result.bookWhy && (
                               <p className="mt-1">
                                 <b>Why it stands out:</b> {a.result.bookWhy}
+                              </p>
+                            )}
+                            {a.bookMessage && (
+                              <p className="mt-1 text-sm text-blue-700">
+                                {a.bookMessage}
                               </p>
                             )}
                             {a.result.bookTitle && !a.result.bookWhy && (
