@@ -44,6 +44,8 @@ type Author = {
   contactMessage?: string;
   contactEmails?: { email: string; source: string }[];
   manualEmail?: string;
+  byName?: boolean;
+  open?: boolean;
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
@@ -89,6 +91,8 @@ function statusBadge(a: Author): { text: string; cls: string } {
     return { text: "Research failed", cls: "bg-red-100 text-red-800" };
   if (a.status === "idle")
     return { text: "Not researched", cls: "bg-violet-100 text-violet-900" };
+  if (a.byName && a.result?.authorName)
+    return { text: "Found by name", cls: "bg-violet-100 text-violet-900" };
   const m = a.result?.matchType;
   if (m === "exact")
     return { text: "Exact match", cls: "bg-green-100 text-green-800" };
@@ -158,6 +162,7 @@ export default function Home() {
   const [researchProgress, setResearchProgress] = useState("");
   const stopResearchRef = useRef(false);
   const [authorsLoaded, setAuthorsLoaded] = useState(false);
+  const [nameQuery, setNameQuery] = useState("");
 
   // Load the saved template when the page opens
   useEffect(() => {
@@ -419,7 +424,7 @@ export default function Home() {
 
   // Where the email will be sent
   function recipientOf(a: Author) {
-    return (a.sendTo ?? a.email).trim();
+    return (a.sendTo ?? (a.byName ? "" : a.email)).trim();
   }
 
   // Sending is allowed when the address is valid, and the match is exact
@@ -429,10 +434,14 @@ export default function Home() {
     return a.result?.matchType === "exact" || a.sendTo !== undefined;
   }
 
-  // Looks for the author's own public email
-  async function findContactEmail(author: Author) {
-    if (!author.result?.authorName) return;
-    updateAuthor(author.email, {
+  // Looks for an author's own public email
+  async function findContactFor(
+    key: string,
+    uploaded: string,
+    authorName: string,
+    bookTitle: string,
+  ) {
+    updateAuthor(key, {
       contactLoading: true,
       contactMessage: "",
       contactEmails: undefined,
@@ -442,15 +451,12 @@ export default function Home() {
       const res = await fetch("/api/find-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          authorName: author.result.authorName,
-          bookTitle: author.result.bookTitle,
-        }),
+        body: JSON.stringify({ authorName, bookTitle }),
       });
       const data = await res.json();
 
       if (!res.ok) {
-        updateAuthor(author.email, {
+        updateAuthor(key, {
           contactLoading: false,
           contactMessage: data.error || "Could not search for the email.",
         });
@@ -459,30 +465,40 @@ export default function Home() {
 
       const list: { email: string; source: string }[] = data.emails || [];
       if (list.length === 0) {
-        updateAuthor(author.email, {
+        updateAuthor(key, {
           contactLoading: false,
-          contactMessage: `Email not found for ${author.result.authorName}. Please research it manually.`,
+          contactMessage: `Email not found for ${authorName}. Please research it manually.`,
         });
         return;
       }
 
-      const same = list.find(
-        (c) => c.email.toLowerCase() === author.email.toLowerCase(),
-      );
-      updateAuthor(author.email, {
+      const same = uploaded
+        ? list.find((c) => c.email.toLowerCase() === uploaded.toLowerCase())
+        : undefined;
+      updateAuthor(key, {
         contactLoading: false,
         contactEmails: list,
         contactMessage: same
           ? "✅ The uploaded email was found on this author's own pages, so it really belongs to them."
           : "Open each source page to check it before you choose.",
-        ...(same ? { sendTo: author.email } : {}),
+        ...(same ? { sendTo: uploaded } : {}),
       });
     } catch {
-      updateAuthor(author.email, {
+      updateAuthor(key, {
         contactLoading: false,
         contactMessage: "Could not reach the server.",
       });
     }
+  }
+
+  function findContactEmail(author: Author) {
+    if (!author.result?.authorName) return;
+    return findContactFor(
+      author.email,
+      author.byName ? "" : author.email,
+      author.result.authorName,
+      author.result.bookTitle,
+    );
   }
 
   // Asks our research route about one author
@@ -492,11 +508,18 @@ export default function Home() {
     updateAuthor(author.email, { status: "loading", message: "" });
 
     try {
-      const res = await fetch("/api/research", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: author.email, name: author.name }),
-      });
+      const res = await fetch(
+        author.byName ? "/api/find-author" : "/api/research",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            author.byName
+              ? { authorName: author.name }
+              : { email: author.email, name: author.name },
+          ),
+        },
+      );
       const data = await res.json();
 
       if (!res.ok) {
@@ -512,6 +535,16 @@ export default function Home() {
         approval: undefined,
         editing: false,
       });
+
+      // For a name search, also look for the author's own email
+      if (author.byName && data.authorName) {
+        await findContactFor(
+          author.email,
+          "",
+          data.authorName,
+          data.bookTitle || "",
+        );
+      }
       return "ok";
     } catch {
       updateAuthor(author.email, {
@@ -520,6 +553,25 @@ export default function Home() {
       });
       return "fail";
     }
+  }
+
+  // Adds an author by typing the name, then researches it
+  async function searchByName() {
+    const name = nameQuery.trim();
+    if (name.length < 3) {
+      setError("Type the author's full name first.");
+      return;
+    }
+    const key = "name:" + name.toLowerCase();
+    if (authors.some((a) => a.email === key)) {
+      setError("This author is already in your list.");
+      return;
+    }
+    setError("");
+    const author: Author = { email: key, name, status: "idle", byName: true };
+    setAuthors((current) => [...current, author]);
+    setNameQuery("");
+    await researchAuthor(author);
   }
 
   // Researches every author that is not done yet, one after the other
@@ -645,6 +697,20 @@ export default function Home() {
         await fillTemplate(a);
       }
     }
+  }
+  // Removes one author from the list
+  function removeAuthor(a: Author) {
+    if (
+      a.sendStatus !== "sent" &&
+      !confirm(`Remove ${a.byName ? a.name : a.email} from the list?`)
+    )
+      return;
+    setAuthors((current) => current.filter((x) => x.email !== a.email));
+  }
+
+  // Removes every author that was already sent
+  function clearSent() {
+    setAuthors((current) => current.filter((x) => x.sendStatus !== "sent"));
   }
 
   const MAX_PER_RUN = 30;
@@ -867,6 +933,29 @@ export default function Home() {
               Upload a CSV or paste emails.
             </p>
           </div>
+          <div>
+            <label htmlFor="byname" className={LABEL}>
+              Search by author name
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <input
+                id="byname"
+                value={nameQuery}
+                onChange={(e) => setNameQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") searchByName();
+                }}
+                placeholder="Example: Kathryn Andrews"
+                className={`${INPUT} min-w-[14rem] flex-1`}
+              />
+              <button onClick={searchByName} className={BTN}>
+                Search
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-gray-600">
+              Finds the author, their best-known book and a public email.
+            </p>
+          </div>
 
           <label
             onDragOver={(e) => e.preventDefault()}
@@ -987,15 +1076,25 @@ export default function Home() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-bold">Authors</h2>
           {authors.length > 0 && (
-            <button
-              onClick={() => {
-                if (confirm("Remove all authors, research and drafts?"))
-                  setAuthors([]);
-              }}
-              className="text-sm font-semibold text-red-700 underline"
-            >
-              Clear all
-            </button>
+            <div className="flex flex-wrap items-center gap-4">
+              {sentCount > 0 && (
+                <button
+                  onClick={clearSent}
+                  className="text-sm font-semibold text-violet-700 underline"
+                >
+                  Remove sent ({sentCount})
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (confirm("Remove all authors, research and drafts?"))
+                    setAuthors([]);
+                }}
+                className="text-sm font-semibold text-red-700 underline"
+              >
+                Clear all
+              </button>
+            </div>
           )}
         </div>
 
@@ -1069,10 +1168,12 @@ export default function Home() {
               {/* Top row */}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="break-all font-semibold">{a.email}</p>
+                  <p className="break-all font-semibold">
+                    {a.byName ? a.name : a.email}
+                  </p>
                   <p className="text-sm text-gray-600">
                     #{i + 1}
-                    {a.name ? ` · ${a.name}` : ""}
+                    {a.name && !a.byName ? ` · ${a.name}` : ""}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1103,6 +1204,20 @@ export default function Home() {
                         ? "Redo"
                         : "Research"}
                   </button>
+                  {a.sendStatus === "sent" && (
+                    <button
+                      onClick={() => updateAuthor(a.email, { open: !a.open })}
+                      className={BTN_OUT}
+                    >
+                      {a.open ? "Hide details" : "Show details"}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => removeAuthor(a)}
+                    className={a.sendStatus === "sent" ? BTN : BTN_OUT}
+                  >
+                    {a.sendStatus === "sent" ? "Done, remove" : "Remove"}
+                  </button>
                 </div>
               </div>
 
@@ -1111,416 +1226,433 @@ export default function Home() {
               )}
 
               {/* Result */}
-              {a.status === "done" && r && (
-                <div className="mt-4 space-y-3 rounded-xl bg-violet-50 p-4 text-sm">
-                  {r.matchType === "exact" && (
-                    <p className="font-semibold text-green-800">
-                      This email was found in the search results.
-                    </p>
-                  )}
-                  {r.matchType === "possible" && (
-                    <p className="font-semibold text-amber-900">
-                      The exact email was not found. These are possible authors
-                      with a similar name. Please check the sources before you
-                      trust this.
-                    </p>
-                  )}
-                  {r.matchType === "none" && (
-                    <p className="font-semibold text-red-800">
-                      No author found for this email.
-                    </p>
-                  )}
-
-                  {r.authorName && (
-                    <div className="space-y-1">
-                      <p className="text-base">
-                        <b>
-                          {r.matchType === "possible"
-                            ? "Best guess:"
-                            : "Author:"}
-                        </b>{" "}
-                        {r.authorName}{" "}
-                        <span className="text-xs text-gray-600">
-                          (confidence: {r.confidence})
-                        </span>
+              {a.status === "done" &&
+                r &&
+                (a.sendStatus !== "sent" || a.open) && (
+                  <div className="mt-4 space-y-3 rounded-xl bg-violet-50 p-4 text-sm">
+                    {r.matchType === "exact" && (
+                      <p className="font-semibold text-green-800">
+                        This email was found in the search results.
                       </p>
-                      {r.bookTitle && (
-                        <p>
-                          <b>Book:</b> {r.bookTitle}
-                        </p>
-                      )}
-                      {r.bookWhy && (
-                        <p>
-                          <b>Why it stands out:</b> {r.bookWhy}
-                        </p>
-                      )}
-                      {a.bookMessage && (
-                        <p className="text-violet-800">{a.bookMessage}</p>
-                      )}
-                      {r.bookTitle && !r.bookWhy && (
-                        <p className="text-gray-600">
-                          No details about this book yet.
-                          <button
-                            onClick={() =>
-                              findBookDetails(
-                                a.email,
-                                r.authorName,
-                                r.bookTitle,
-                              )
-                            }
-                            disabled={a.bookLoading}
-                            className={`${BTN_SM} ml-2`}
-                          >
-                            {a.bookLoading ? "Searching…" : "Find book details"}
-                          </button>
-                        </p>
-                      )}
-                    </div>
-                  )}
+                    )}
+                    {r.matchType === "possible" && (
+                      <p className="font-semibold text-amber-900">
+                        {a.byName
+                          ? "Found by searching the author's name. Check the sources, because other authors may share this name."
+                          : "The exact email was not found. These are possible authors with a similar name. Please check the sources before you trust this."}
+                      </p>
+                    )}
+                    {r.matchType === "none" && (
+                      <p className="font-semibold text-red-800">
+                        No author found for this email.
+                      </p>
+                    )}
 
-                  {r.notes && <p className="text-gray-600">{r.notes}</p>}
-
-                  {r.candidates.length > 0 && (
-                    <div>
-                      <b>Other authors with a similar name:</b>
-                      <ul className="mt-1 list-disc space-y-1 pl-5">
-                        {r.candidates.map((c, n) => (
-                          <li key={n}>
-                            <b>{c.authorName}</b>
-                            {c.bookTitle && <> – {c.bookTitle}</>}
-                            {c.reason && (
-                              <span className="text-gray-600">
-                                {" "}
-                                ({c.reason})
-                              </span>
-                            )}{" "}
+                    {r.authorName && (
+                      <div className="space-y-1">
+                        <p className="text-base">
+                          <b>
+                            {r.matchType === "possible"
+                              ? "Best guess:"
+                              : "Author:"}
+                          </b>{" "}
+                          {r.authorName}{" "}
+                          <span className="text-xs text-gray-600">
+                            (confidence: {r.confidence})
+                          </span>
+                        </p>
+                        {r.bookTitle && (
+                          <p>
+                            <b>Book:</b> {r.bookTitle}
+                          </p>
+                        )}
+                        {r.bookWhy && (
+                          <p>
+                            <b>Why it stands out:</b> {r.bookWhy}
+                          </p>
+                        )}
+                        {a.bookMessage && (
+                          <p className="text-violet-800">{a.bookMessage}</p>
+                        )}
+                        {r.bookTitle && !r.bookWhy && (
+                          <p className="text-gray-600">
+                            No details about this book yet.
                             <button
-                              onClick={() => pickCandidate(a.email, c)}
-                              className={BTN_SM}
+                              onClick={() =>
+                                findBookDetails(
+                                  a.email,
+                                  r.authorName,
+                                  r.bookTitle,
+                                )
+                              }
+                              disabled={a.bookLoading}
+                              className={`${BTN_SM} ml-2`}
                             >
-                              Use this one
+                              {a.bookLoading
+                                ? "Searching…"
+                                : "Find book details"}
                             </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Where to send, when the match is not exact */}
-                  {r.matchType !== "exact" && r.authorName && (
-                    <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
-                      <p>
-                        The email you uploaded (<b>{a.email}</b>) was not
-                        confirmed as belonging to <b>{r.authorName}</b>. A
-                        message sent there may reach someone else.
-                      </p>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          onClick={() => findContactEmail(a)}
-                          disabled={a.contactLoading}
-                          className={BTN}
-                        >
-                          {a.contactLoading
-                            ? "Searching…"
-                            : `Find ${r.authorName}'s own email`}
-                        </button>
-                        <button
-                          onClick={() =>
-                            updateAuthor(a.email, { sendTo: a.email })
-                          }
-                          className={BTN_OUT}
-                        >
-                          Keep uploaded email
-                        </button>
+                          </p>
+                        )}
                       </div>
+                    )}
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          value={a.manualEmail ?? ""}
-                          onChange={(e) =>
-                            updateAuthor(a.email, {
-                              manualEmail: e.target.value,
-                            })
-                          }
-                          placeholder="Found the right email yourself? Type it here"
-                          className={`${INPUT} min-w-[16rem] flex-1`}
-                        />
-                        <button
-                          onClick={() => {
-                            const v = (a.manualEmail ?? "").trim();
-                            if (!validEmail(v)) {
-                              updateAuthor(a.email, {
-                                contactMessage:
-                                  "That email does not look right. Please check it and try again.",
-                              });
-                              return;
-                            }
-                            updateAuthor(a.email, {
-                              sendTo: v,
-                              contactMessage: `✅ Using ${v}, the email you added yourself.`,
-                            });
-                          }}
-                          className={BTN_OUT}
-                        >
-                          Use this email
-                        </button>
-                      </div>
+                    {r.notes && <p className="text-gray-600">{r.notes}</p>}
 
-                      {a.contactMessage && (
-                        <p className="font-semibold text-violet-900">
-                          {a.contactMessage}
-                        </p>
-                      )}
-
-                      {a.contactEmails && a.contactEmails.length > 0 && (
-                        <ul className="list-disc space-y-1 pl-5">
-                          {a.contactEmails.map((c, n) => (
+                    {r.candidates.length > 0 && (
+                      <div>
+                        <b>Other authors with a similar name:</b>
+                        <ul className="mt-1 list-disc space-y-1 pl-5">
+                          {r.candidates.map((c, n) => (
                             <li key={n}>
-                              <b>{c.email}</b>{" "}
-                              <a
-                                href={c.source}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-violet-700 underline"
-                              >
-                                (where it was found)
-                              </a>{" "}
+                              <b>{c.authorName}</b>
+                              {c.bookTitle && <> – {c.bookTitle}</>}
+                              {c.reason && (
+                                <span className="text-gray-600">
+                                  {" "}
+                                  ({c.reason})
+                                </span>
+                              )}{" "}
                               <button
-                                onClick={() =>
-                                  updateAuthor(a.email, { sendTo: c.email })
-                                }
+                                onClick={() => pickCandidate(a.email, c)}
                                 className={BTN_SM}
                               >
-                                Send to this email
+                                Use this one
                               </button>
                             </li>
                           ))}
                         </ul>
-                      )}
-
-                      <p className="font-semibold">
-                        {a.sendTo !== undefined
-                          ? `Will send to: ${a.sendTo || "(empty)"}`
-                          : "No send address chosen yet."}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Sources */}
-                  {r.sources.length > 0 && (
-                    <details>
-                      <summary className="cursor-pointer font-semibold">
-                        Sources ({r.sources.length})
-                      </summary>
-                      <ul className="mt-2 list-disc space-y-1 pl-5">
-                        {r.sources.map((s, n) => (
-                          <li key={n}>
-                            <a
-                              href={s.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-violet-700 underline"
-                            >
-                              {s.title}
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-
-                  {/* Edit form */}
-                  {a.editing && (
-                    <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-4">
-                      <div>
-                        <label className={LABEL}>Author name</label>
-                        <input
-                          value={r.authorName}
-                          onChange={(e) =>
-                            updateResult(a.email, {
-                              authorName: e.target.value,
-                            })
-                          }
-                          className={INPUT}
-                        />
                       </div>
-                      <div>
-                        <label className={LABEL}>Book title</label>
-                        <input
-                          value={r.bookTitle}
-                          onChange={(e) =>
-                            updateResult(a.email, {
-                              bookTitle: e.target.value,
-                            })
-                          }
-                          className={INPUT}
-                        />
-                      </div>
-                      <div>
-                        <label className={LABEL}>Why it stands out</label>
-                        <textarea
-                          value={r.bookWhy}
-                          onChange={(e) =>
-                            updateResult(a.email, { bookWhy: e.target.value })
-                          }
-                          rows={3}
-                          className={INPUT}
-                        />
-                      </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Yes / No / Edit */}
-                  <div className="flex flex-wrap items-center gap-2 border-t border-violet-100 pt-3">
-                    <button
-                      onClick={() =>
-                        updateAuthor(a.email, {
-                          approval: "approved",
-                          editing: false,
-                        })
-                      }
-                      className={BTN}
-                    >
-                      Yes, correct
-                    </button>
-                    <button
-                      onClick={() => {
-                        updateAuthor(a.email, {
-                          approval: "approved",
-                          editing: false,
-                        });
-                        if (r.bookTitle && !r.bookWhy && !a.bookLoading)
-                          findBookDetails(a.email, r.authorName, r.bookTitle);
-                      }}
-                      className={BTN_OUT}
-                    >
-                      No
-                    </button>
-                    <button
-                      onClick={() =>
-                        updateAuthor(a.email, { editing: !a.editing })
-                      }
-                      className={BTN_OUT}
-                    >
-                      {a.editing ? "Close edit" : "Edit"}
-                    </button>
-                  </div>
+                    {/* Where to send, when the match is not exact */}
+                    {r.matchType !== "exact" && r.authorName && (
+                      <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+                        {a.byName ? (
+                          <p>
+                            You searched by name, so there is no uploaded email.
+                            Find <b>{r.authorName}</b>&apos;s public email
+                            below, or type one you found yourself. Check the
+                            sources first, because another author may share this
+                            name.
+                          </p>
+                        ) : (
+                          <p>
+                            The email you uploaded (<b>{a.email}</b>) was not
+                            confirmed as belonging to <b>{r.authorName}</b>. A
+                            message sent there may reach someone else.
+                          </p>
+                        )}
 
-                  {/* Email draft */}
-                  {a.approval === "approved" && (
-                    <div className="space-y-3 border-t border-violet-100 pt-3">
-                      <button
-                        onClick={() => fillTemplate(a)}
-                        disabled={a.writing}
-                        className={BTN}
-                      >
-                        {a.writing
-                          ? "Filling…"
-                          : a.draft
-                            ? "Fill again (resets edits)"
-                            : "Fill template"}
-                      </button>
-
-                      {a.draft && (
-                        <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-4">
-                          <div>
-                            <label className={LABEL}>To</label>
-                            <input
-                              value={a.sendTo ?? a.email}
-                              onChange={(e) =>
-                                updateAuthor(a.email, {
-                                  sendTo: e.target.value,
-                                })
-                              }
-                              className={INPUT}
-                            />
-                            {!validEmail(recipientOf(a)) && (
-                              <p className="mt-1 text-sm text-red-700">
-                                This email address does not look valid.
-                              </p>
-                            )}
-                            {a.sendTo !== undefined &&
-                              a.sendTo.trim().toLowerCase() !==
-                                a.email.toLowerCase() && (
-                                <p className="mt-1 text-xs text-gray-600">
-                                  Changed from the uploaded email ({a.email}).
-                                </p>
-                              )}
-                          </div>
-
-                          {/\[[^\]]+\]/.test(
-                            a.draft.subject + a.draft.body,
-                          ) && (
-                            <p className="rounded-lg bg-amber-100 p-2 text-amber-900">
-                              Some placeholders are still not filled (like{" "}
-                              {
-                                (a.draft.subject + a.draft.body).match(
-                                  /\[[^\]]+\]/,
-                                )?.[0]
-                              }
-                              ). Please fix them by hand below before sending.
-                            </p>
-                          )}
-
-                          <div>
-                            <label className={LABEL}>Subject</label>
-                            <input
-                              value={a.draft.subject}
-                              onChange={(e) =>
-                                updateDraft(a.email, {
-                                  subject: e.target.value,
-                                })
-                              }
-                              className={INPUT}
-                            />
-                          </div>
-                          <div>
-                            <label className={LABEL}>Email</label>
-                            <textarea
-                              value={a.draft.body}
-                              onChange={(e) =>
-                                updateDraft(a.email, { body: e.target.value })
-                              }
-                              rows={14}
-                              className={INPUT}
-                            />
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            onClick={() => findContactEmail(a)}
+                            disabled={a.contactLoading}
+                            className={BTN}
+                          >
+                            {a.contactLoading
+                              ? "Searching…"
+                              : `Find ${r.authorName}'s own email`}
+                          </button>
+                          {!a.byName && (
                             <button
-                              onClick={() => sendOne(a, true)}
+                              onClick={() =>
+                                updateAuthor(a.email, { sendTo: a.email })
+                              }
                               className={BTN_OUT}
                             >
-                              Send test to me
+                              Keep uploaded email
                             </button>
-                            <button
-                              onClick={() => sendOneClick(a)}
-                              disabled={
-                                a.sendStatus === "sending" ||
-                                a.sendStatus === "sent" ||
-                                !canSend(a)
-                              }
-                              className={BTN}
-                            >
-                              {a.sendStatus === "sending"
-                                ? "Sending…"
-                                : a.sendStatus === "sent"
-                                  ? "Sent"
-                                  : "Send to author"}
-                            </button>
-                            {a.sendStatus === "failed" && (
-                              <span className="text-red-700">
-                                {a.sendError}
-                              </span>
-                            )}
-                          </div>
+                          )}
                         </div>
-                      )}
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            value={a.manualEmail ?? ""}
+                            onChange={(e) =>
+                              updateAuthor(a.email, {
+                                manualEmail: e.target.value,
+                              })
+                            }
+                            placeholder="Found the right email yourself? Type it here"
+                            className={`${INPUT} min-w-[16rem] flex-1`}
+                          />
+                          <button
+                            onClick={() => {
+                              const v = (a.manualEmail ?? "").trim();
+                              if (!validEmail(v)) {
+                                updateAuthor(a.email, {
+                                  contactMessage:
+                                    "That email does not look right. Please check it and try again.",
+                                });
+                                return;
+                              }
+                              updateAuthor(a.email, {
+                                sendTo: v,
+                                contactMessage: `✅ Using ${v}, the email you added yourself.`,
+                              });
+                            }}
+                            className={BTN_OUT}
+                          >
+                            Use this email
+                          </button>
+                        </div>
+
+                        {a.contactMessage && (
+                          <p className="font-semibold text-violet-900">
+                            {a.contactMessage}
+                          </p>
+                        )}
+
+                        {a.contactEmails && a.contactEmails.length > 0 && (
+                          <ul className="list-disc space-y-1 pl-5">
+                            {a.contactEmails.map((c, n) => (
+                              <li key={n}>
+                                <b>{c.email}</b>{" "}
+                                <a
+                                  href={c.source}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-violet-700 underline"
+                                >
+                                  (where it was found)
+                                </a>{" "}
+                                <button
+                                  onClick={() =>
+                                    updateAuthor(a.email, { sendTo: c.email })
+                                  }
+                                  className={BTN_SM}
+                                >
+                                  Send to this email
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+
+                        <p className="font-semibold">
+                          {a.sendTo !== undefined
+                            ? `Will send to: ${a.sendTo || "(empty)"}`
+                            : "No send address chosen yet."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Sources */}
+                    {r.sources.length > 0 && (
+                      <details>
+                        <summary className="cursor-pointer font-semibold">
+                          Sources ({r.sources.length})
+                        </summary>
+                        <ul className="mt-2 list-disc space-y-1 pl-5">
+                          {r.sources.map((s, n) => (
+                            <li key={n}>
+                              <a
+                                href={s.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-violet-700 underline"
+                              >
+                                {s.title}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+
+                    {/* Edit form */}
+                    {a.editing && (
+                      <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-4">
+                        <div>
+                          <label className={LABEL}>Author name</label>
+                          <input
+                            value={r.authorName}
+                            onChange={(e) =>
+                              updateResult(a.email, {
+                                authorName: e.target.value,
+                              })
+                            }
+                            className={INPUT}
+                          />
+                        </div>
+                        <div>
+                          <label className={LABEL}>Book title</label>
+                          <input
+                            value={r.bookTitle}
+                            onChange={(e) =>
+                              updateResult(a.email, {
+                                bookTitle: e.target.value,
+                              })
+                            }
+                            className={INPUT}
+                          />
+                        </div>
+                        <div>
+                          <label className={LABEL}>Why it stands out</label>
+                          <textarea
+                            value={r.bookWhy}
+                            onChange={(e) =>
+                              updateResult(a.email, { bookWhy: e.target.value })
+                            }
+                            rows={3}
+                            className={INPUT}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Yes / No / Edit */}
+                    <div className="flex flex-wrap items-center gap-2 border-t border-violet-100 pt-3">
+                      <button
+                        onClick={() =>
+                          updateAuthor(a.email, {
+                            approval: "approved",
+                            editing: false,
+                          })
+                        }
+                        className={BTN}
+                      >
+                        Yes, correct
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateAuthor(a.email, {
+                            approval: "approved",
+                            editing: false,
+                          });
+                          if (r.bookTitle && !r.bookWhy && !a.bookLoading)
+                            findBookDetails(a.email, r.authorName, r.bookTitle);
+                        }}
+                        className={BTN_OUT}
+                      >
+                        No
+                      </button>
+                      <button
+                        onClick={() =>
+                          updateAuthor(a.email, { editing: !a.editing })
+                        }
+                        className={BTN_OUT}
+                      >
+                        {a.editing ? "Close edit" : "Edit"}
+                      </button>
                     </div>
-                  )}
-                </div>
-              )}
+
+                    {/* Email draft */}
+                    {a.approval === "approved" && (
+                      <div className="space-y-3 border-t border-violet-100 pt-3">
+                        <button
+                          onClick={() => fillTemplate(a)}
+                          disabled={a.writing}
+                          className={BTN}
+                        >
+                          {a.writing
+                            ? "Filling…"
+                            : a.draft
+                              ? "Fill again (resets edits)"
+                              : "Fill template"}
+                        </button>
+
+                        {a.draft && (
+                          <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-4">
+                            <div>
+                              <label className={LABEL}>To</label>
+                              <input
+                                value={a.sendTo ?? (a.byName ? "" : a.email)}
+                                onChange={(e) =>
+                                  updateAuthor(a.email, {
+                                    sendTo: e.target.value,
+                                  })
+                                }
+                                className={INPUT}
+                              />
+                              {!validEmail(recipientOf(a)) && (
+                                <p className="mt-1 text-sm text-red-700">
+                                  This email address does not look valid.
+                                </p>
+                              )}
+                              {!a.byName &&
+                                a.sendTo !== undefined &&
+                                a.sendTo.trim().toLowerCase() !==
+                                  a.email.toLowerCase() && (
+                                  <p className="mt-1 text-xs text-gray-600">
+                                    Changed from the uploaded email ({a.email}).
+                                  </p>
+                                )}
+                            </div>
+
+                            {/\[[^\]]+\]/.test(
+                              a.draft.subject + a.draft.body,
+                            ) && (
+                              <p className="rounded-lg bg-amber-100 p-2 text-amber-900">
+                                Some placeholders are still not filled (like{" "}
+                                {
+                                  (a.draft.subject + a.draft.body).match(
+                                    /\[[^\]]+\]/,
+                                  )?.[0]
+                                }
+                                ). Please fix them by hand below before sending.
+                              </p>
+                            )}
+
+                            <div>
+                              <label className={LABEL}>Subject</label>
+                              <input
+                                value={a.draft.subject}
+                                onChange={(e) =>
+                                  updateDraft(a.email, {
+                                    subject: e.target.value,
+                                  })
+                                }
+                                className={INPUT}
+                              />
+                            </div>
+                            <div>
+                              <label className={LABEL}>Email</label>
+                              <textarea
+                                value={a.draft.body}
+                                onChange={(e) =>
+                                  updateDraft(a.email, { body: e.target.value })
+                                }
+                                rows={14}
+                                className={INPUT}
+                              />
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                onClick={() => sendOne(a, true)}
+                                className={BTN_OUT}
+                              >
+                                Send test to me
+                              </button>
+                              <button
+                                onClick={() => sendOneClick(a)}
+                                disabled={
+                                  a.sendStatus === "sending" ||
+                                  a.sendStatus === "sent" ||
+                                  !canSend(a)
+                                }
+                                className={BTN}
+                              >
+                                {a.sendStatus === "sending"
+                                  ? "Sending…"
+                                  : a.sendStatus === "sent"
+                                    ? "Sent"
+                                    : "Send to author"}
+                              </button>
+                              {a.sendStatus === "failed" && (
+                                <span className="text-red-700">
+                                  {a.sendError}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
             </article>
           );
         })}
