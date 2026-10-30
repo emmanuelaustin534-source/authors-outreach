@@ -21,7 +21,7 @@ async function webSearch(query: string): Promise<TavilyResult[]> {
 
 export async function POST(req: Request) {
   try {
-    const { authorName } = await req.json();
+    const { authorName, bookHint } = await req.json();
     const name = String(authorName || "").trim();
 
     if (name.length < 3) {
@@ -37,7 +37,12 @@ export async function POST(req: Request) {
       );
     }
 
-    const results = await webSearch(`${name} author books Goodreads Amazon`);
+    const hint = String(bookHint || "").trim();
+    const results = await webSearch(
+      hint
+        ? `${name} author "${hint}" book`
+        : `${name} author books Goodreads Amazon`,
+    );
 
     if (results.length === 0) {
       return NextResponse.json({
@@ -63,6 +68,7 @@ export async function POST(req: Request) {
     const prompt = `You are a careful research assistant. Below are web search results about an author.
 
 Author name typed by the user: ${name}
+Book the user has in mind (may be empty): ${hint || "none"}
 
 SEARCH RESULTS:
 ${searchText}
@@ -73,6 +79,7 @@ Rules:
 - Pick the most unique or notable book of the main author.
 - "confidence" is how sure you are that the results are about one real author with this name.
 - If you cannot find an author, set "authorName" to an empty string and "confidence" to "none".
+- If a book is given, prefer the author of that book.
 
 Reply with a JSON object like this:
 {

@@ -46,35 +46,36 @@ type Author = {
   manualEmail?: string;
   byName?: boolean;
   open?: boolean;
+  hint?: string;
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
-const DEFAULT_SUBJECT = "National media feature for [Book Title]";
+const DEFAULT_SUBJECT =
+  "Media Feature Spotlight: [Book Title] for USA Wire & AP News";
 
-const DEFAULT_BODY = `Hi [Author Name],
+const DEFAULT_BODY = `Hello [Author First Name],
 
-I spent some time looking into your work recently, and I was genuinely drawn to the core theme behind [Book Title]. Bringing a book like yours into the world requires an enormous amount of dedication, and it deserves to be discovered by readers who are actively looking for your perspective.
+The editorial team at The Author Global Press is currently reviewing [Book Title] for a national media feature spotlight, targeting widespread syndication across major press networks including USA Wire and Associated Press (AP News).
 
-Our editorial team at The Author Global Press runs a dedicated Author Spotlight Series. We feature independent authors across national news networks to help strengthen their search visibility on Google and build long-term media authority.
+When reviewing your work, our team was deeply drawn to the [insert specific book themes, e.g., leadership / personal growth / emotional] insights in your book, as well as your personal journey [insert 1 quick sentence about their background]. Your perspective brings precisely the inspiring narrative that national news platforms value.
 
-A feature like this can completely change how your book is discovered. It helps you:
+How This Media Placement Benefits Your Book:
 
-1. Introduce your book to thousands of new, active readers
-2. Establish a permanent, professional media presence for your author brand
-3. Significantly improve your visibility and ranking on Google search results
-4. Create a direct bridge for new readers to discover and purchase your book
-5. Give you a polished, professional asset to share on your website and social media
-6. Build long-term credibility that works for your book for years to come
 
-Rather than just telling you about our service, we prefer to let our editorial work speak for itself. 
+High-Value Audience Reach: Direct placement across high-authority news wires, putting your message in front of millions of readers, industry leaders, and literary professionals.
 
-Our team would love to write a custom, complimentary feature draft on your book so that you can review the exact layout and narrative before making any decisions. There is no drafting fee and no obligation to proceed.
+Authority-Building Media Assets: Official press publication credits with USA Wire and AP News logos to display proudly on your author platform, website, and book jackets.
 
-Thank you for putting your work out there, it makes a bigger impact than you might realize!
+Permanent High-Domain Discoverability: Guaranteed indexing on high-domain news sites, ensuring your name and book title rank prominently at the top of search results indefinitely.
+
+Syndicated Brand Exposure: Comprehensive digital syndication that captures the attention of massive regional and national audiences, driving enduring organic traffic to your work.
+
+Review and Syndication Process
+
+To ensure total alignment with your brand, our production team constructs a complete, press-ready layout preview before anything is scheduled for wire distribution. Our initial drafting and editorial reviews are conducted entirely without financial obligation or cost to the author. You retain 100% editorial control; we move forward with national wire syndication only after you review and approve the final text layout. Once your feature is approved, our team handles the technical syndication across our media network to maximize your book's reach. If you would like to review your custom press layout preview or examine recent feature spotlights, please reply directly to this message to initiate the preview process.
 
 Best regards,
-
-Austine Emmanuel`;
+Austin`;
 
 // ---------- Look and feel (purple and white) ----------
 const CARD = "rounded-2xl border border-violet-100 bg-white p-6 shadow-sm";
@@ -548,7 +549,7 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             author.byName
-              ? { authorName: author.name }
+              ? { authorName: author.name, bookHint: author.hint }
               : { email: author.email, name: author.name },
           ),
         },
@@ -589,8 +590,9 @@ export default function Home() {
   }
 
   // Adds an author by typing the name, then researches it
-  async function searchByName() {
-    const name = nameQuery.trim();
+  // Adds an author by name, then researches it
+  async function addByName(rawName: string, after?: string, hint?: string) {
+    const name = rawName.trim();
     if (name.length < 3) {
       setError("Type the author's full name first.");
       return;
@@ -601,10 +603,34 @@ export default function Home() {
       return;
     }
     setError("");
-    const author: Author = { email: key, name, status: "idle", byName: true };
-    setAuthors((current) => [...current, author]);
-    setNameQuery("");
+    const author: Author = {
+      email: key,
+      name,
+      status: "idle",
+      byName: true,
+      hint: hint || undefined,
+    };
+    setAuthors((current) => {
+      // Put the new card right under the one it came from
+      const i = after ? current.findIndex((x) => x.email === after) : -1;
+      if (i === -1) return [...current, author];
+      const copy = [...current];
+      copy.splice(i + 1, 0, author);
+      return copy;
+    });
     await researchAuthor(author);
+  }
+
+  // The "Search" button in the search box
+  function searchByName() {
+    const n = nameQuery;
+    if (n.trim().length >= 3) setNameQuery("");
+    return addByName(n);
+  }
+
+  // True when this author is already a card in the list
+  function listedByName(name: string) {
+    return authors.some((x) => x.email === "name:" + name.trim().toLowerCase());
   }
 
   // Researches every author that is not done yet, one after the other
@@ -1354,6 +1380,17 @@ export default function Home() {
                                 className={BTN_SM}
                               >
                                 Use this one
+                              </button>{" "}
+                              <button
+                                onClick={() =>
+                                  addByName(c.authorName, a.email, c.bookTitle)
+                                }
+                                disabled={listedByName(c.authorName)}
+                                className={BTN_SM}
+                              >
+                                {listedByName(c.authorName)
+                                  ? "In your list"
+                                  : "Research this author"}
                               </button>
                             </li>
                           ))}
