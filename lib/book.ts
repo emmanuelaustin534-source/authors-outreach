@@ -1,28 +1,36 @@
 import { GoogleGenAI } from "@google/genai";
 
-type TavilyResult = { title: string; url: string; content: string };
+export type TavilyResult = { title: string; url: string; content: string };
 
 export type BookInfo = {
   bookWhy: string;
   sources: { title: string; url: string }[];
 };
 
-async function webSearch(query: string): Promise<TavilyResult[]> {
+export async function webSearch(
+  query: string,
+  domains?: string[],
+): Promise<TavilyResult[]> {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.TAVILY_API_KEY}`,
     },
-    body: JSON.stringify({ query, search_depth: "basic", max_results: 8 }),
+    body: JSON.stringify({
+      query,
+      search_depth: "basic",
+      max_results: 8,
+      ...(domains ? { include_domains: domains } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`Tavily error ${res.status}`);
   const data = await res.json();
   return data.results ?? [];
 }
 
-// Opens the pages and reads the parts about the book
-async function extractPages(
+// Opens the pages and reads the parts about the topic
+export async function extractPages(
   urls: string[],
   query: string,
 ): Promise<{ url: string; content: string }[]> {
@@ -62,7 +70,7 @@ function rank(url: string) {
   return 2;
 }
 
-// Reads the book pages and writes what makes the book unique
+// Reads the book pages and writes a summary of the book
 export async function researchBook(
   authorName: string,
   bookTitle: string,
@@ -70,21 +78,31 @@ export async function researchBook(
   const empty: BookInfo = { bookWhy: "", sources: [] };
   if (!authorName || !bookTitle) return empty;
 
-  const found = await webSearch(
-    `"${bookTitle}" by ${authorName} book description`,
-  );
-
-  // Keep only results that really mention this book (title before any ":" subtitle)
   const mainTitle = bookTitle.split(":")[0].trim().toLowerCase();
-  const matches = found
-    .filter((r) =>
+  const keep = (rs: TavilyResult[]) =>
+    rs.filter((r) =>
       (r.title + " " + r.content).toLowerCase().includes(mainTitle),
-    )
-    .sort((a, b) => rank(a.url) - rank(b.url))
-    .slice(0, 3);
+    );
+
+  // 1. Amazon and Goodreads first. 2. The whole web if nothing was found.
+  let found: TavilyResult[] = [];
+  try {
+    found = keep(
+      await webSearch(`${bookTitle} ${authorName} book`, [
+        "amazon.com",
+        "goodreads.com",
+      ]),
+    );
+  } catch {}
+  if (found.length === 0) {
+    found = keep(
+      await webSearch(`"${bookTitle}" by ${authorName} book description`),
+    );
+  }
+
+  const matches = found.sort((a, b) => rank(a.url) - rank(b.url)).slice(0, 3);
   if (matches.length === 0) return empty;
 
-  // Open the best pages and read them
   const pages = await extractPages(
     matches.map((m) => m.url),
     `What is the book "${bookTitle}" by ${authorName} about? Story, theme, setting and description.`,
@@ -111,12 +129,12 @@ export async function researchBook(
 PAGES:
 ${searchText}
 
-Write what makes this book interesting or unique, in one or two sentences.
+Write a summary of this book in 3 to 5 sentences: what it is about, its main themes, the setting or characters, and who it is for.
 
 Rules:
 - Use ONLY facts found in the pages above. Do not guess.
 - If a page has the book's description (the blurb), use it.
-- If there is no description, you may use what the pages clearly say about the story, theme or setting (for example from the author's bio or reader reviews).
+- If there is no description, you may use what the pages clearly say about the story, theme or setting (for example from reader reviews).
 - Do NOT write about prices, sales, ranks or the number of reviews.
 - Only return an empty string if the pages say nothing about the book's story or theme.
 
@@ -129,7 +147,6 @@ Reply with a JSON object: { "bookWhy": "the sentences, or empty string" }`;
   });
 
   const text = response.text ?? "";
-  console.log("Text sent to Gemini:", searchText.length, "chars");
   console.log("Gemini book reply:", text);
 
   const start = text.indexOf("{");

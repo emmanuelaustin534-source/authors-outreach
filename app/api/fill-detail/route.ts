@@ -5,8 +5,14 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
-    const { template, placeholders, authorName, bookTitle, bookWhy } =
-      await req.json();
+    const {
+      template,
+      placeholders,
+      authorName,
+      bookTitle,
+      bookWhy,
+      authorBio,
+    } = await req.json();
     const slots: string[] = Array.isArray(placeholders) ? placeholders : [];
 
     if (slots.length === 0) return NextResponse.json({ details: [] });
@@ -32,12 +38,15 @@ AUTHOR: ${authorName}
 BOOK: ${bookTitle}
 FACTS ABOUT THE BOOK (the only facts you may use):
 ${bookWhy}
+FACTS ABOUT THE AUTHOR (the only facts you may use about the author):
+${authorBio || "none"}
 
 Rules:
 - For each placeholder, write ONLY the words that replace it, so the sentence around it reads naturally. The text inside the brackets tells you what to write.
 - Use only the facts above. Do not invent anything.
 - Keep each one short: under 25 words, no quotation marks, no full stop at the end.
 - If the facts are not enough for a placeholder, use an empty string for it.
+- Use the facts about the book for placeholders about the book (themes, topics, ideas). Use the facts about the author for placeholders about the author's background or journey.
 
 Reply with a JSON object: { "details": ["words for placeholder 1", "words for placeholder 2"] }`;
 

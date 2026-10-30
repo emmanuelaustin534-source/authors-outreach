@@ -21,6 +21,16 @@ type Research = {
   notes: string;
   candidates: Candidate[];
   sources: Source[];
+  authorBio?: string;
+};
+
+type Book = {
+  title: string;
+  year: string;
+  description: string;
+  source: string;
+  link: string;
+  subtitle?: string;
 };
 
 type Draft = { subject: string; body: string };
@@ -47,6 +57,11 @@ type Author = {
   byName?: boolean;
   open?: boolean;
   hint?: string;
+  books?: Book[];
+  booksLoading?: boolean;
+  booksMessage?: string;
+  bioLoading?: boolean;
+  bioMessage?: string;
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
@@ -112,7 +127,7 @@ function statusBadge(a: Author): { text: string; cls: string } {
 
 // Names the app already knows how to fill (a few spellings are accepted)
 function isKnownSlot(s: string) {
-  return /^\[\s*(author['’]?s?\s*name|author|name|first\s*name|book['’]?s?\s*(title|name)|title|book)\s*\]$/i.test(
+  return /^\[\s*((author['’]?s?\s*)?(first\s*)?name|author|book['’]?s?\s*(title|name)|title|book)\s*\]$/i.test(
     s,
   );
 }
@@ -134,7 +149,8 @@ function fillText(
 ) {
   const first = vals.authorName.trim().split(" ")[0];
   let out = text;
-  if (first) out = out.replace(/\[\s*first\s*name\s*\]/gi, () => first);
+  if (first)
+    out = out.replace(/\[\s*(author\s*)?first\s*name\s*\]/gi, () => first);
   if (vals.authorName)
     out = out.replace(
       /\[\s*(author['’]?s?\s*name|author|name)\s*\]/gi,
@@ -421,7 +437,7 @@ export default function Home() {
               : "No details about this book were found on the pages. Use Edit to type your own detail.",
             result: {
               ...a.result,
-              bookWhy: data.bookWhy || "",
+              bookWhy: data.bookWhy || a.result.bookWhy,
               sources: [...a.result.sources, ...newSources],
             },
           };
@@ -441,16 +457,98 @@ export default function Home() {
       authorName: c.authorName,
       bookTitle: c.bookTitle,
       bookWhy: c.bookWhy,
+      authorBio: "",
     });
     updateAuthor(email, {
       sendTo: undefined,
       manualEmail: undefined,
       contactEmails: undefined,
       contactMessage: "",
+      books: undefined,
+      booksMessage: "",
+      bioMessage: "",
     });
-    if (!c.bookWhy) findBookDetails(email, c.authorName, c.bookTitle);
+    findBooks(email, c.authorName);
+    if (!c.bookWhy && c.bookTitle)
+      findBookDetails(email, c.authorName, c.bookTitle);
   }
 
+  // Finds up to 3 books of an author (free: Google Books and Open Library)
+  async function findBooks(key: string, authorName: string) {
+    updateAuthor(key, { booksLoading: true, booksMessage: "" });
+    try {
+      const res = await fetch("/api/author-books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        updateAuthor(key, {
+          booksLoading: false,
+          booksMessage: data.error || "Could not find books.",
+        });
+        return;
+      }
+      const list: Book[] = data.books || [];
+      updateAuthor(key, {
+        booksLoading: false,
+        books: list,
+        booksMessage: list.length
+          ? ""
+          : "No books found. Use Edit to type the book title yourself.",
+      });
+    } catch {
+      updateAuthor(key, {
+        booksLoading: false,
+        booksMessage: "Could not reach the server.",
+      });
+    }
+  }
+
+  // Uses one of the 3 books
+  function pickBook(key: string, b: Book, authorName: string) {
+    updateResult(key, {
+      bookTitle: b.title,
+      bookWhy:
+        b.description ||
+        (b.subtitle ? `The book's subtitle is "${b.subtitle}".` : ""),
+    });
+    updateAuthor(key, { bookMessage: "" });
+    if (!b.description) findBookDetails(key, authorName, b.title);
+  }
+
+  // Finds the public background of the author
+  async function findBio(key: string, authorName: string) {
+    updateAuthor(key, { bioLoading: true, bioMessage: "" });
+    try {
+      const res = await fetch("/api/author-bio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        updateAuthor(key, {
+          bioLoading: false,
+          bioMessage: data.error || "Could not research the background.",
+        });
+        return;
+      }
+      updateResult(key, { authorBio: data.bio || "" });
+      updateAuthor(key, {
+        bioLoading: false,
+        bioMessage: data.bio
+          ? ""
+          : "No background found. Use Edit to type it yourself.",
+      });
+    } catch {
+      updateAuthor(key, {
+        bioLoading: false,
+        bioMessage: "Could not reach the server.",
+      });
+    }
+  }
   // Checks that an email address looks real
   function validEmail(s: string) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -569,6 +667,7 @@ export default function Home() {
         approval: undefined,
         editing: false,
       });
+      if (data.authorName) findBooks(author.email, data.authorName);
 
       // For a name search, also look for the author's own email
       if (author.byName && data.authorName) {
@@ -715,12 +814,12 @@ export default function Home() {
     setError("");
     updateAuthor(author.email, { writing: true });
 
-    const { authorName, bookTitle, bookWhy } = author.result;
+    const { authorName, bookTitle, bookWhy, authorBio } = author.result;
     const details: Record<string, string> = {};
 
     // Ask Gemini to write every other [bracket] in your template
     const slots = findAiSlots(subjectTemplate + "\n" + bodyTemplate);
-    if (slots.length > 0 && bookWhy) {
+    if (slots.length > 0 && (bookWhy || authorBio)) {
       try {
         const res = await fetch("/api/fill-detail", {
           method: "POST",
@@ -731,6 +830,7 @@ export default function Home() {
             authorName,
             bookTitle,
             bookWhy,
+            authorBio: authorBio || "",
           }),
         });
         const data = await res.json();
@@ -1329,9 +1429,12 @@ export default function Home() {
                           </p>
                         )}
                         {r.bookWhy && (
-                          <p>
-                            <b>Why it stands out:</b> {r.bookWhy}
-                          </p>
+                          <details>
+                            <summary className="cursor-pointer font-semibold">
+                              Book details
+                            </summary>
+                            <p className="mt-1">{r.bookWhy}</p>
+                          </details>
                         )}
                         {a.bookMessage && (
                           <p className="text-violet-800">{a.bookMessage}</p>
@@ -1355,6 +1458,103 @@ export default function Home() {
                                 : "Find book details"}
                             </button>
                           </p>
+                        )}
+                      </div>
+                    )}
+                    {r.authorName && (
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <b>Pick the book to write about</b>
+                          <button
+                            onClick={() => findBooks(a.email, r.authorName)}
+                            disabled={a.booksLoading}
+                            className={BTN_SM}
+                          >
+                            {a.booksLoading
+                              ? "Searching…"
+                              : a.books
+                                ? "Search again"
+                                : "Find books"}
+                          </button>
+                        </div>
+                        {a.booksMessage && (
+                          <p className="text-gray-600">{a.booksMessage}</p>
+                        )}
+                        {a.books?.map((b, n) => (
+                          <div
+                            key={n}
+                            className="rounded-lg border border-violet-200 bg-white p-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-semibold">
+                                {b.title}
+                                {b.year ? ` (${b.year})` : ""}
+                              </p>
+                              {r.bookTitle === b.title ? (
+                                <span
+                                  className={`${BADGE} bg-green-100 text-green-800`}
+                                >
+                                  Selected
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() =>
+                                    pickBook(a.email, b, r.authorName)
+                                  }
+                                  className={BTN_SM}
+                                >
+                                  Use this book
+                                </button>
+                              )}
+                            </div>
+                            {b.subtitle && (
+                              <p className="text-gray-600">{b.subtitle}</p>
+                            )}
+                            {b.description && (
+                              <p className="mt-1 text-gray-600">
+                                {b.description.slice(0, 220)}
+                                {b.description.length > 220 ? "…" : ""}
+                              </p>
+                            )}
+                            <p className="mt-1 text-xs text-gray-500">
+                              Source:{" "}
+                              {b.link ? (
+                                <a
+                                  href={b.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-violet-700 underline"
+                                >
+                                  {b.source}
+                                </a>
+                              ) : (
+                                b.source
+                              )}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {r.authorName && (
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <b>Author background</b>
+                          <button
+                            onClick={() => findBio(a.email, r.authorName)}
+                            disabled={a.bioLoading}
+                            className={BTN_SM}
+                          >
+                            {a.bioLoading
+                              ? "Searching…"
+                              : r.authorBio
+                                ? "Search again"
+                                : "Find background"}
+                          </button>
+                        </div>
+                        {r.authorBio && <p>{r.authorBio}</p>}
+                        {a.bioMessage && (
+                          <p className="text-gray-600">{a.bioMessage}</p>
                         )}
                       </div>
                     )}
@@ -1562,11 +1762,24 @@ export default function Home() {
                           />
                         </div>
                         <div>
-                          <label className={LABEL}>Why it stands out</label>
+                          <label className={LABEL}>Book details</label>
                           <textarea
                             value={r.bookWhy}
                             onChange={(e) =>
                               updateResult(a.email, { bookWhy: e.target.value })
+                            }
+                            rows={3}
+                            className={INPUT}
+                          />
+                        </div>
+                        <div>
+                          <label className={LABEL}>Author background</label>
+                          <textarea
+                            value={r.authorBio ?? ""}
+                            onChange={(e) =>
+                              updateResult(a.email, {
+                                authorBio: e.target.value,
+                              })
                             }
                             rows={3}
                             className={INPUT}
@@ -1596,6 +1809,8 @@ export default function Home() {
                           });
                           if (r.bookTitle && !r.bookWhy && !a.bookLoading)
                             findBookDetails(a.email, r.authorName, r.bookTitle);
+                          if (r.authorName && !r.authorBio && !a.bioLoading)
+                            findBio(a.email, r.authorName);
                         }}
                         className={BTN_OUT}
                       >
