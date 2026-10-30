@@ -49,35 +49,32 @@ type Author = {
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
-const DEFAULT_SUBJECT = "National media feature spotlight for [Book Title]";
+const DEFAULT_SUBJECT = "National media feature for [Book Title]";
 
-const DEFAULT_BODY = `Hello [Author Name],
+const DEFAULT_BODY = `Hi [Author Name],
 
-I recently came across your book, *[Book Title]*, and what caught my attention was its focus on [briefly mention the book’s main theme, message, or subject].
+I spent some time looking into your work recently, and I was genuinely drawn to the core theme behind [Book Title]. Bringing a book like yours into the world requires an enormous amount of dedication, and it deserves to be discovered by readers who are actively looking for your perspective.
 
-The way your book explores [mention a specific topic, character, life lesson, or interesting idea from the book] gives readers something meaningful to connect with. I can imagine the time, creativity, and dedication that went into bringing this story to life.
+Our editorial team at The Author Global Press runs a dedicated Author Spotlight Series. We feature independent authors across national news networks to help strengthen their search visibility on Google and build long-term media authority.
 
-I'm reaching out from The Author Global Press to introduce our Author Spotlight Feature, which focuses on highlighting authors, their writing journeys, and the inspiration and message behind their books.
+A feature like this can completely change how your book is discovered. It helps you:
 
-Through a personalized editorial feature, we aim to help more readers discover your work and learn the story behind it.
+1. Introduce your book to thousands of new, active readers
+2. Establish a permanent, professional media presence for your author brand
+3. Significantly improve your visibility and ranking on Google search results
+4. Create a direct bridge for new readers to discover and purchase your book
+5. Give you a polished, professional asset to share on your website and social media
+6. Build long-term credibility that works for your book for years to come
 
-Your feature can help you:
+Rather than just telling you about our service, we prefer to let our editorial work speak for itself. 
 
-- Introduce *[Book Title]* to new readers.
-- Share the inspiration and message behind your book.
-- Highlight your journey and experience as an author.
-- Strengthen your online author presence.
-- Give interested readers a direct way to discover your book.
+Our team would love to write a custom, complimentary feature draft on your book so that you can review the exact layout and narrative before making any decisions. There is no drafting fee and no obligation to proceed.
 
-You can review a complimentary draft before deciding whether to proceed. There is no drafting fee and no obligation to move forward.
+Thank you for putting your work out there, it makes a bigger impact than you might realize!
 
-Would you be interested in seeing a personalized feature draft for *[Book Title]*?
+Best regards,
 
-Simply reply **YES**, and I'll be happy to discuss the next step.
-
-Best regards,  
-  
-Author Global Press`;
+Austine Emmanuel`;
 
 // ---------- Look and feel (purple and white) ----------
 const CARD = "rounded-2xl border border-violet-100 bg-white p-6 shadow-sm";
