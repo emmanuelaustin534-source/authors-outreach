@@ -77,7 +77,7 @@ Simply reply **YES**, and I'll be happy to discuss the next step.
 
 Best regards,  
   
-The Author Global Press`;
+Author Global Press`;
 
 // ---------- Look and feel (purple and white) ----------
 const CARD = "rounded-2xl border border-violet-100 bg-white p-6 shadow-sm";
@@ -112,21 +112,46 @@ function statusBadge(a: Author): { text: string; cls: string } {
   return { text: "No author found", cls: "bg-red-100 text-red-800" };
 }
 
+// Names the app already knows how to fill (a few spellings are accepted)
+function isKnownSlot(s: string) {
+  return /^\[\s*(author['’]?s?\s*name|author|name|first\s*name|book['’]?s?\s*(title|name)|title|book)\s*\]$/i.test(
+    s,
+  );
+}
+
+// Any other [bracket] in the template is something the AI should write
+function findAiSlots(text: string): string[] {
+  const all = text.match(/\[[^\]]+\]/g) || [];
+  return [...new Set(all.filter((s) => !isKnownSlot(s)))];
+}
+
 // Replaces the placeholders in a text
 function fillText(
   text: string,
-  vals: { authorName: string; bookTitle: string; detail: string },
+  vals: {
+    authorName: string;
+    bookTitle: string;
+    details: Record<string, string>;
+  },
 ) {
   const first = vals.authorName.trim().split(" ")[0];
   let out = text;
+  if (first) out = out.replace(/\[\s*first\s*name\s*\]/gi, () => first);
   if (vals.authorName)
-    out = out.replace(/\[\s*author name\s*\]/gi, () => vals.authorName);
-  if (first) out = out.replace(/\[\s*first name\s*\]/gi, () => first);
+    out = out.replace(
+      /\[\s*(author['’]?s?\s*name|author|name)\s*\]/gi,
+      () => vals.authorName,
+    );
   if (vals.bookTitle)
-    out = out.replace(/\[\s*book title\s*\]/gi, () => vals.bookTitle);
-  if (vals.detail)
-    out = out.replace(/\[\s*insert[^\]]*\]/gi, () => vals.detail);
-  return out;
+    out = out.replace(
+      /\[\s*(book['’]?s?\s*(title|name)|title|book)\s*\]/gi,
+      () => vals.bookTitle,
+    );
+  for (const [slot, detail] of Object.entries(vals.details)) {
+    if (detail) out = out.split(slot).join(detail);
+  }
+  // Plain emails cannot show bold or italic, so remove the *stars*
+  return out.replace(/\*([^*\n]+)\*/g, "$1");
 }
 
 // A small log in your browser of who you already emailed
@@ -658,7 +683,6 @@ export default function Home() {
     );
   }
 
-  // Fills your template for one author
   async function fillTemplate(author: Author) {
     if (!author.result) return;
     if (!subjectTemplate.trim() || !bodyTemplate.trim()) {
@@ -669,29 +693,33 @@ export default function Home() {
     updateAuthor(author.email, { writing: true });
 
     const { authorName, bookTitle, bookWhy } = author.result;
-    let detail = "";
+    const details: Record<string, string> = {};
 
-    // Ask Gemini for the one specific detail, only if the template has that slot
-    const placeholder = (bodyTemplate.match(/\[\s*insert[^\]]*\]/i) || [""])[0];
-    if (placeholder && bookWhy) {
+    // Ask Gemini to write every other [bracket] in your template
+    const slots = findAiSlots(subjectTemplate + "\n" + bodyTemplate);
+    if (slots.length > 0 && bookWhy) {
       try {
         const res = await fetch("/api/fill-detail", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             template: bodyTemplate,
-            placeholder,
+            placeholders: slots,
             authorName,
             bookTitle,
             bookWhy,
           }),
         });
         const data = await res.json();
-        if (res.ok) detail = data.detail || "";
+        if (res.ok && Array.isArray(data.details)) {
+          slots.forEach((s, i) => {
+            details[s] = String(data.details[i] ?? "");
+          });
+        }
       } catch {}
     }
 
-    const vals = { authorName, bookTitle, detail };
+    const vals = { authorName, bookTitle, details };
     updateAuthor(author.email, {
       writing: false,
       draft: {
