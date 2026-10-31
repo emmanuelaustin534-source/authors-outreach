@@ -44,7 +44,7 @@ ${authorBio || "none"}
 Rules:
 - For each placeholder, write ONLY the words that replace it, so the sentence around it reads naturally. The text inside the brackets tells you what to write.
 - Use only the facts above. Do not invent anything.
-- Keep each one short: under 25 words, no quotation marks, no full stop at the end.
+- Keep each one short: under 45 words, no quotation marks, no full stop at the end.
 - If the facts are not enough for a placeholder, use an empty string for it.
 - Use the facts about the book for placeholders about the book (themes, topics, ideas). Use the facts about the author for placeholders about the author's background or journey.
 

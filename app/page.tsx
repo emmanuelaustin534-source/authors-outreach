@@ -33,6 +33,13 @@ type Book = {
   subtitle?: string;
 };
 
+type Site = { website: string; contacts: { url: string; form: boolean }[] };
+type EmailCheck = {
+  for: string;
+  level: "ok" | "warn" | "bad";
+  message: string;
+  suggestion?: string;
+};
 type Draft = { subject: string; body: string };
 
 type Author = {
@@ -62,6 +69,11 @@ type Author = {
   booksMessage?: string;
   bioLoading?: boolean;
   bioMessage?: string;
+  site?: Site;
+  siteLoading?: boolean;
+  siteMessage?: string;
+  emailCheck?: EmailCheck;
+  checking?: boolean;
 };
 
 const EMAIL_REGEX = /[^\s,;<>"']+@[^\s,;<>"']+\.[^\s,;<>"']+/g;
@@ -165,7 +177,9 @@ function fillText(
     if (detail) out = out.split(slot).join(detail);
   }
   // Plain emails cannot show bold or italic, so remove the *stars*
-  return out.replace(/\*([^*\n]+)\*/g, "$1");
+  return out
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1");
 }
 
 // A small log in your browser of who you already emailed
@@ -258,6 +272,8 @@ export default function Home() {
               writing: false,
               contactLoading: false,
               bookLoading: false,
+              checking: false,
+              siteLoading: false,
               editing: false,
               sendStatus: a.sendStatus === "sending" ? undefined : a.sendStatus,
             }),
@@ -467,6 +483,8 @@ export default function Home() {
       books: undefined,
       booksMessage: "",
       bioMessage: "",
+      site: undefined,
+      siteMessage: "",
     });
     findBooks(email, c.authorName);
     if (!c.bookWhy && c.bookTitle)
@@ -561,11 +579,61 @@ export default function Home() {
 
   // Sending is allowed when the address is valid, and the match is exact
   // or you chose the address yourself
-  function canSend(a: Author) {
-    if (!validEmail(recipientOf(a))) return false;
-    return a.result?.matchType === "exact" || a.sendTo !== undefined;
+  // True when the last check said this address is bad
+  function isBlocked(a: Author) {
+    return (
+      !!a.emailCheck &&
+      a.emailCheck.for === recipientOf(a) &&
+      a.emailCheck.level === "bad"
+    );
   }
 
+  // Sending is allowed when the address is valid and not blocked, and the
+  // match is exact or you chose the address yourself
+  function canSend(a: Author) {
+    if (!validEmail(recipientOf(a))) return false;
+    if (isBlocked(a)) return false;
+    return a.result?.matchType === "exact" || a.sendTo !== undefined;
+  }
+  // Looks for the author's own website and its contact form
+  async function findSite(key: string, authorName: string, bookTitle: string) {
+    updateAuthor(key, { siteLoading: true, siteMessage: "", site: undefined });
+    try {
+      const res = await fetch("/api/find-contact-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorName, bookTitle }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        updateAuthor(key, {
+          siteLoading: false,
+          siteMessage: data.error || "Could not look for the website.",
+        });
+        return;
+      }
+
+      const site: Site = {
+        website: data.website || "",
+        contacts: data.contacts || [],
+      };
+      updateAuthor(key, {
+        siteLoading: false,
+        site: site.website ? site : undefined,
+        siteMessage: !site.website
+          ? `No website found for ${authorName}. Please research it manually.`
+          : site.contacts.length === 0
+            ? "Found their website, but no contact page. Open it and look for a form."
+            : "",
+      });
+    } catch {
+      updateAuthor(key, {
+        siteLoading: false,
+        siteMessage: "Could not reach the server.",
+      });
+    }
+  }
   // Looks for an author's own public email
   async function findContactFor(
     key: string,
@@ -601,6 +669,7 @@ export default function Home() {
           contactLoading: false,
           contactMessage: `Email not found for ${authorName}. Please research it manually.`,
         });
+        findSite(key, authorName, bookTitle);
         return;
       }
 
@@ -814,12 +883,30 @@ export default function Home() {
     setError("");
     updateAuthor(author.email, { writing: true });
 
-    const { authorName, bookTitle, bookWhy, authorBio } = author.result;
+    const { authorName, bookTitle, bookWhy } = author.result;
+    let bio = author.result.authorBio || "";
     const details: Record<string, string> = {};
 
-    // Ask Gemini to write every other [bracket] in your template
     const slots = findAiSlots(subjectTemplate + "\n" + bodyTemplate);
-    if (slots.length > 0 && (bookWhy || authorBio)) {
+
+    // If the template needs details and the background is missing, look it up
+    if (slots.length > 0 && !bio) {
+      try {
+        const r2 = await fetch("/api/author-bio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authorName }),
+        });
+        const d2 = await r2.json();
+        if (r2.ok && d2.bio) {
+          bio = d2.bio;
+          updateResult(author.email, { authorBio: d2.bio });
+        }
+      } catch {}
+    }
+
+    // Ask Gemini to write every other [bracket] in your template
+    if (slots.length > 0 && (bookWhy || bio)) {
       try {
         const res = await fetch("/api/fill-detail", {
           method: "POST",
@@ -830,7 +917,7 @@ export default function Home() {
             authorName,
             bookTitle,
             bookWhy,
-            authorBio: authorBio || "",
+            authorBio: bio,
           }),
         });
         const data = await res.json();
@@ -875,6 +962,42 @@ export default function Home() {
     setAuthors((current) => current.filter((x) => x.sendStatus !== "sent"));
   }
 
+  // Checks if the address can receive email (reuses a check already made)
+  async function runEmailCheck(a: Author): Promise<EmailCheck> {
+    const address = recipientOf(a);
+    if (
+      a.emailCheck &&
+      a.emailCheck.for === address &&
+      a.emailCheck.level !== "warn"
+    ) {
+      return a.emailCheck;
+    }
+    updateAuthor(a.email, { checking: true });
+    let check: EmailCheck;
+    try {
+      const res = await fetch("/api/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: address }),
+      });
+      const data = await res.json();
+      check = {
+        for: address,
+        level: data.level ?? "warn",
+        message: data.message ?? "",
+        suggestion: data.suggestion,
+      };
+    } catch {
+      check = {
+        for: address,
+        level: "warn",
+        message: "Could not check this address right now.",
+      };
+    }
+    updateAuthor(a.email, { checking: false, emailCheck: check });
+    return check;
+  }
+
   const MAX_PER_RUN = 30;
 
   function hasPlaceholder(d: Draft) {
@@ -894,6 +1017,14 @@ export default function Home() {
 
     setError("");
     if (!test) {
+      const check = await runEmailCheck(author);
+      if (check.level === "bad") {
+        updateAuthor(author.email, {
+          sendStatus: "failed",
+          sendError: check.message,
+        });
+        return false;
+      }
       updateAuthor(author.email, { sendStatus: "sending", sendError: "" });
     }
 
@@ -1627,6 +1758,17 @@ export default function Home() {
                               ? "Searching…"
                               : `Find ${r.authorName}'s own email`}
                           </button>
+                          <button
+                            onClick={() =>
+                              findSite(a.email, r.authorName, r.bookTitle)
+                            }
+                            disabled={a.siteLoading}
+                            className={BTN_OUT}
+                          >
+                            {a.siteLoading
+                              ? "Searching…"
+                              : "Find website contact form"}
+                          </button>
                           {!a.byName && (
                             <button
                               onClick={() =>
@@ -1701,6 +1843,58 @@ export default function Home() {
                               </li>
                             ))}
                           </ul>
+                        )}
+
+                        {a.siteMessage && (
+                          <p className="font-semibold text-violet-900">
+                            {a.siteMessage}
+                          </p>
+                        )}
+
+                        {a.site && (
+                          <div className="space-y-1">
+                            <p>
+                              <b>Author&apos;s website:</b>{" "}
+                              <a
+                                href={a.site.website}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-violet-700 underline"
+                              >
+                                {a.site.website}
+                              </a>
+                            </p>
+                            {a.site.contacts.length > 0 && (
+                              <>
+                                <p className="font-semibold">
+                                  Contact pages on their own website:
+                                </p>
+                                <ul className="list-disc space-y-1 pl-5">
+                                  {a.site.contacts.map((c, n) => (
+                                    <li key={n}>
+                                      <a
+                                        href={c.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-violet-700 underline"
+                                      >
+                                        {c.url}
+                                      </a>{" "}
+                                      <span className="text-xs text-gray-600">
+                                        {c.form
+                                          ? "(looks like a contact form)"
+                                          : "(contact page, check for a form)"}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                                <p className="text-xs text-gray-600">
+                                  Click Fill template, then use Copy email text
+                                  under the draft and paste it into the form.
+                                </p>
+                              </>
+                            )}
+                          </div>
                         )}
 
                         <p className="font-semibold">
@@ -1867,6 +2061,49 @@ export default function Home() {
                                     Changed from the uploaded email ({a.email}).
                                   </p>
                                 )}
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={() => runEmailCheck(a)}
+                                  disabled={a.checking}
+                                  className={BTN_SM}
+                                >
+                                  {a.checking
+                                    ? "Checking…"
+                                    : "Check email address"}
+                                </button>
+                                {a.emailCheck &&
+                                  a.emailCheck.for === recipientOf(a) && (
+                                    <span
+                                      className={`text-sm font-semibold ${
+                                        a.emailCheck.level === "ok"
+                                          ? "text-green-700"
+                                          : a.emailCheck.level === "warn"
+                                            ? "text-amber-800"
+                                            : "text-red-700"
+                                      }`}
+                                    >
+                                      {a.emailCheck.level === "ok"
+                                        ? "✅"
+                                        : a.emailCheck.level === "warn"
+                                          ? "⚠️"
+                                          : "⛔"}{" "}
+                                      {a.emailCheck.message}
+                                    </span>
+                                  )}
+                                {a.emailCheck?.suggestion &&
+                                  a.emailCheck.for === recipientOf(a) && (
+                                    <button
+                                      onClick={() =>
+                                        updateAuthor(a.email, {
+                                          sendTo: a.emailCheck?.suggestion,
+                                        })
+                                      }
+                                      className={BTN_SM}
+                                    >
+                                      Use {a.emailCheck.suggestion}
+                                    </button>
+                                  )}
+                              </div>
                             </div>
 
                             {/\[[^\]]+\]/.test(
@@ -1929,6 +2166,37 @@ export default function Home() {
                                     ? "Sent"
                                     : "Send to author"}
                               </button>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(
+                                      `${a.draft!.subject}\n\n${a.draft!.body}`,
+                                    );
+                                    setProgress(
+                                      "✅ Email text copied. Paste it into the website form.",
+                                    );
+                                  } catch {
+                                    setError(
+                                      "Could not copy. Select the text and copy it by hand.",
+                                    );
+                                  }
+                                }}
+                                className={BTN_OUT}
+                              >
+                                Copy email text
+                              </button>
+                              {a.sendStatus !== "sent" && (
+                                <button
+                                  onClick={() =>
+                                    updateAuthor(a.email, {
+                                      sendStatus: "sent",
+                                    })
+                                  }
+                                  className={BTN_OUT}
+                                >
+                                  I sent it through the website form
+                                </button>
+                              )}
                               {a.sendStatus === "failed" && (
                                 <span className="text-red-700">
                                   {a.sendError}

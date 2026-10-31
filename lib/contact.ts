@@ -231,3 +231,129 @@ export async function findAuthorEmail(
     .slice(0, 5)
     .map((e) => ({ email: e.email, source: e.source }));
 }
+export type SiteInfo = {
+  website: string;
+  contacts: { url: string; form: boolean }[];
+};
+
+const CONTACT_PATH = /contact|get-in-touch|reach|connect|write-to/i;
+
+function pathOf(url: string) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
+
+// A best guess: does the page text look like a contact form?
+function looksLikeForm(text: string) {
+  const t = text.toLowerCase();
+  return (
+    /\b(send|submit)\b/.test(t) &&
+    /\bmessage\b/.test(t) &&
+    /\b(name|e-?mail)\b/.test(t)
+  );
+}
+
+function isNotFound(text: string) {
+  return /page not found|404|doesn['’]t exist|nothing (was )?found/i.test(
+    text.slice(0, 400),
+  );
+}
+
+// Finds the author's own website and its contact page (no social media)
+export async function findAuthorSite(
+  authorName: string,
+  bookTitle: string,
+): Promise<SiteInfo> {
+  const none: SiteInfo = { website: "", contacts: [] };
+  const tokens = nameTokens(authorName);
+  if (tokens.length === 0) return none;
+
+  const query = bookTitle
+    ? `${authorName} author "${bookTitle}" official website`
+    : `${authorName} author official website`;
+  const results = await webSearch(query);
+
+  // Keep only sites whose address looks like the author's own
+  const last = tokens[tokens.length - 1];
+  const scored = results
+    .filter((r) => !SKIP_HOSTS.some((h) => hostOf(r.url).includes(h)))
+    .map((r) => {
+      const host = hostOf(r.url).replace(/[^a-z0-9]/g, "");
+      const all = tokens.every((t) => host.includes(t));
+      const lastOnly = last.length >= 4 && host.includes(last);
+      const mentions = tokens.every((t) =>
+        (r.title + " " + r.content).toLowerCase().includes(t),
+      );
+      const score = all ? 2 : lastOnly && mentions ? 1 : 0;
+      return { r, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) return none;
+
+  let origin = "";
+  try {
+    origin = new URL(scored[0].r.url).origin;
+  } catch {
+    return none;
+  }
+  const siteHost = hostOf(origin);
+
+  // The home page, the usual contact addresses, and contact pages seen in search
+  const urls = new Set<string>([origin]);
+  for (const p of ["/contact", "/contact-me", "/contact-us"])
+    urls.add(origin + p);
+  for (const x of scored) {
+    if (hostOf(x.r.url) === siteHost && CONTACT_PATH.test(pathOf(x.r.url)))
+      urls.add(x.r.url);
+  }
+
+  const pages = await extractPages([...urls].slice(0, 8));
+
+  const toContacts = (ps: { url: string; content: string }[]) =>
+    ps
+      .filter(
+        (p) =>
+          hostOf(p.url) === siteHost &&
+          CONTACT_PATH.test(pathOf(p.url)) &&
+          p.content.length > 80 &&
+          !isNotFound(p.content),
+      )
+      .map((p) => ({ url: p.url, form: looksLikeForm(p.content) }));
+
+  let contacts = toContacts(pages);
+
+  // If none of the usual addresses worked, look for a "Contact" link on the home page
+  if (contacts.length === 0) {
+    const home = pages.find((p) => p.url.replace(/\/$/, "") === origin);
+    const links = [
+      ...(home?.content ?? "").matchAll(
+        /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g,
+      ),
+    ]
+      .filter(
+        (m) =>
+          hostOf(m[2]) === siteHost &&
+          (CONTACT_PATH.test(m[1]) || CONTACT_PATH.test(m[2])),
+      )
+      .map((m) => m[2]);
+    const extra = [...new Set(links)].filter((u) => !urls.has(u)).slice(0, 3);
+    if (extra.length > 0) contacts = toContacts(await extractPages(extra));
+  }
+
+  // Remove duplicates, forms first
+  const seen = new Set<string>();
+  const unique = contacts.filter((c) => {
+    const k = c.url.replace(/\/$/, "").toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  unique.sort((a, b) => Number(b.form) - Number(a.form));
+
+  return { website: origin, contacts: unique.slice(0, 3) };
+}
