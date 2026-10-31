@@ -12,12 +12,16 @@ export function proxy(request: NextRequest) {
   }
 
   // Check the password the browser sends
+
   const header = request.headers.get("authorization") || "";
   if (header.startsWith("Basic ")) {
     try {
       const decoded = atob(header.slice(6));
-      const given = decoded.slice(decoded.indexOf(":") + 1);
-      if (given === password) return NextResponse.next();
+      const i = decoded.indexOf(":");
+      const user = decoded.slice(0, i).trim();
+      const pass = decoded.slice(i + 1).trim();
+      const secret = password.trim();
+      if (pass === secret || user === secret) return NextResponse.next();
     } catch {}
   }
 
