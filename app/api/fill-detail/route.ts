@@ -26,7 +26,7 @@ export async function POST(req: Request) {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    const prompt = `I am filling in placeholders in an email template.
+    const prompt = `I am filling in placeholders in an email to an author. The email is from a publicist who came across the author's book.
 
 EMAIL TEMPLATE:
 ${template}
@@ -36,17 +36,16 @@ ${slots.map((s, i) => `${i + 1}. ${s}`).join("\n")}
 
 AUTHOR: ${authorName}
 BOOK: ${bookTitle}
-FACTS ABOUT THE BOOK (the only facts you may use):
-${bookWhy}
-FACTS ABOUT THE AUTHOR (the only facts you may use about the author):
-${authorBio || "none"}
+BOOK DESCRIPTION (the facts you may use):
+${bookWhy || "none"}
+${authorBio ? `ABOUT THE AUTHOR (facts you may use):\n${authorBio}` : ""}
 
 Rules:
-- For each placeholder, write ONLY the words that replace it, so the sentence around it reads naturally. The text inside the brackets tells you what to write.
-- Use only the facts above. Do not invent anything.
-- Keep each one short: under 45 words, no quotation marks, no full stop at the end.
-- If the facts are not enough for a placeholder, use an empty string for it.
-- Use the facts about the book for placeholders about the book (themes, topics, ideas). Use the facts about the author for placeholders about the author's background or journey.
+- For each placeholder, write ONLY the words that replace it, so the sentence around it reads naturally and correctly. The words inside the brackets tell you what kind of text to write.
+- Base everything on the description above. You may paraphrase, combine ideas, and say what the book seems to explore or what message it seems to carry, as long as it follows from the description.
+- Never invent names, events, places or facts that are not in the description. Do not claim to have read the whole book.
+- Always write something for every placeholder when the description allows it. Use an empty string only if the description says nothing at all that could fit.
+- Keep each one short: usually under 25 words, with no quotation marks and no full stop at the end. A placeholder that asks for a sentence or two can be up to 45 words.
 
 Reply with a JSON object: { "details": ["words for placeholder 1", "words for placeholder 2"] }`;
 
@@ -68,6 +67,13 @@ Reply with a JSON object: { "details": ["words for placeholder 1", "words for pl
     return NextResponse.json({ details });
   } catch (err) {
     console.error(err);
+    const status = (err as { status?: number }).status;
+    if (status === 429) {
+      return NextResponse.json(
+        { error: "Rate limit reached. Wait a moment and try again." },
+        { status: 429 },
+      );
+    }
     return NextResponse.json(
       { error: "Something went wrong while writing the details." },
       { status: 500 },
